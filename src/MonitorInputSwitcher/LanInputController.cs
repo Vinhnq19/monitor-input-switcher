@@ -11,6 +11,26 @@ namespace MonitorInputSwitcher;
 
 internal enum LanInputStatus { Local, Switching, Remote, Receiving, WindowsBlocked, CaptureFailed, Overloaded }
 
+// A trailing mouse hook can arrive after the last Raw Input packet when the user stops.
+// Only continuing physical motion without any raw packets indicates capture loss.
+internal struct RawMouseWatchdog
+{
+    private long _firstMove, _lastMove;
+    private const int MissingMilliseconds = 180;
+
+    public void ObserveMove(long now)
+    {
+        if (_lastMove == 0 || Stopwatch.GetElapsedTime(_lastMove, now).TotalMilliseconds >= MissingMilliseconds)
+        {
+            _firstMove = now;
+        }
+        _lastMove = now;
+    }
+
+    public readonly bool MissingRaw => _lastMove != 0 &&
+        Stopwatch.GetElapsedTime(_firstMove, _lastMove).TotalMilliseconds >= MissingMilliseconds;
+}
+
 internal sealed class LanInputController : IAsyncDisposable
 {
     private readonly LanPeerService _peer;
@@ -42,7 +62,8 @@ internal sealed class LanInputController : IAsyncDisposable
     private LanEdge _laptopEdge;
     private Point _point;
     private int _keyCount, _mouseButtons, _push, _pending, _active, _next, _pendingRatio;
-    private long _enterTick, _retryRelease, _lastAck, _lastSample, _lastRemotePointer, _lastRaw, _nextDesktopCheck;
+    private long _enterTick, _retryRelease, _lastAck, _lastSample, _nextDesktopCheck;
+    private RawMouseWatchdog _rawWatchdog;
     private TaskCompletionSource<bool>? _manualRequest;
     private long _manualTick;
     private int _state;
@@ -241,7 +262,8 @@ internal sealed class LanInputController : IAsyncDisposable
                 Release(notify: true);
             }
         }
-        if (_pending != 0 && Stopwatch.GetElapsedTime(_enterTick, now).TotalMilliseconds >= 350)
+        if ((_active != 0 || _pending != 0) && session?.InputResponsive != true ||
+            _pending != 0 && Stopwatch.GetElapsedTime(_enterTick, now).TotalMilliseconds >= 350)
         {
             Release(notify: true);
         }
@@ -256,8 +278,7 @@ internal sealed class LanInputController : IAsyncDisposable
                 RequestEnter(automatic: false);
             }
         }
-        if (_options.Role == LanRole.Pc && _active != 0 && _lastRemotePointer > _lastRaw &&
-            Stopwatch.GetElapsedTime(_lastRemotePointer, now).TotalMilliseconds >= 180)
+        if (_options.Role == LanRole.Pc && _active != 0 && _rawWatchdog.MissingRaw)
         {
             EmergencyCore();
         }
@@ -400,9 +421,9 @@ internal sealed class LanInputController : IAsyncDisposable
             {
                 _point = mouse.Point;
             }
-            else if (_options.Role == LanRole.Pc && _lastRemotePointer <= _lastRaw)
+            else if (_options.Role == LanRole.Pc)
             {
-                _lastRemotePointer = Stopwatch.GetTimestamp();
+                _rawWatchdog.ObserveMove(Stopwatch.GetTimestamp());
             }
         }
         else
@@ -454,7 +475,7 @@ internal sealed class LanInputController : IAsyncDisposable
 
     private void Raw(WindowsLanInput.RawMouse mouse)
     {
-        _lastRaw = Stopwatch.GetTimestamp();
+        _rawWatchdog = default;
         if (_options.Role != LanRole.Pc || !CanForward || !Available)
         {
             return;
@@ -519,7 +540,7 @@ internal sealed class LanInputController : IAsyncDisposable
 
     private bool RequestEnter(bool automatic)
     {
-        if (!Available || !_peerReady || !CanForward || _active != 0 || _pending != 0 ||
+        if (!Available || !_peerReady || !CanForward || _session?.InputResponsive != true || _active != 0 || _pending != 0 ||
             _selected is not { } screen || _mouseButtons != 0 || _keyCount != 0 ||
             (automatic && !_options.EdgeSwitch))
         {
@@ -605,7 +626,7 @@ internal sealed class LanInputController : IAsyncDisposable
 
     private void AcceptEnter(int id, int ratio, LanEdge edge)
     {
-        if (!Available || _active != 0 || _selected is null || _keyCount != 0 || _mouseButtons != 0 ||
+        if (!Available || _session?.InputResponsive != true || _active != 0 || _selected is null || _keyCount != 0 || _mouseButtons != 0 ||
             _down.Count != 0 || _buttons.Count != 0 || !WindowsLanInput.IsDefaultDesktop() ||
             !WindowsLanInput.Position(LanGeometry.AtEdge(_selected.Bounds, edge, ratio)))
         {
@@ -626,7 +647,7 @@ internal sealed class LanInputController : IAsyncDisposable
         {
             return;
         }
-        if (!Available || _keyCount != 0 || _mouseButtons != 0 || _native is null || _selected is null)
+        if (!Available || _session?.InputResponsive != true || _keyCount != 0 || _mouseButtons != 0 || _native is null || _selected is null)
         {
             Release(notify: true);
             return;
@@ -638,7 +659,7 @@ internal sealed class LanInputController : IAsyncDisposable
         }
         _active = id;
         _pending = 0;
-        _lastRaw = _lastRemotePointer = Stopwatch.GetTimestamp();
+        _rawWatchdog = default;
         SetStatus(LanInputStatus.Remote);
         CompleteManual(true);
     }

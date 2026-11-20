@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
 
@@ -8,6 +9,18 @@ internal static class LanInputChecks
 {
     public static async Task RunAsync(LanTestAssertion check)
     {
+        var watchdog = new RawMouseWatchdog();
+        long tick = Stopwatch.Frequency;
+        watchdog.ObserveMove(tick);
+        watchdog.ObserveMove(10 * tick);
+        check("isolated mouse hooks separated by idle time do not pause sharing", !watchdog.MissingRaw);
+        watchdog.ObserveMove(10 * tick + tick / 10);
+        watchdog.ObserveMove(10 * tick + tick / 5);
+        check("sustained hook movement without Raw Input still triggers recovery", watchdog.MissingRaw);
+        watchdog = default;
+        watchdog.ObserveMove(11 * tick);
+        check("a fresh raw packet clears the missing-motion interval", !watchdog.MissingRaw);
+
         var source = new Rectangle(-2560, -200, 2560, 1440);
         var target = new Rectangle(0, 100, 1920, 1080);
         foreach (var edge in Enum.GetValues<LanEdge>())

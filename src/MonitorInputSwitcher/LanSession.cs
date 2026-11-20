@@ -56,7 +56,8 @@ public sealed class LanSession(LanLink link) : IDisposable
     private const int MaxPayloadLength = 1024;
     private const int HeartbeatPayloadLength = sizeof(long);
     private const int HeartbeatIntervalMilliseconds = 250;
-    private const int LeaseMilliseconds = 1000;
+    private const int InputLeaseMilliseconds = 1000;
+    private const int ConnectionTimeoutMilliseconds = 5000;
     private const int MaximumInputAgeMilliseconds = 200;
     private const double JitterSmoothing = 16.0;
 
@@ -79,6 +80,7 @@ public sealed class LanSession(LanLink link) : IDisposable
 
     private long _lastReceivedTicks;
     private long _writeStarted;
+    private long _writeDeadline;
     private int _peakQueueDepth;
     private long _queueOverflows;
     private long _sequenceGaps, _duplicates, _invalid;
@@ -88,6 +90,18 @@ public sealed class LanSession(LanLink link) : IDisposable
     private int _linkClosed;
     private int _cancellationDisposed;
     internal bool Healthy => Volatile.Read(ref _faultCode) == 0;
+    internal bool InputResponsive
+    {
+        get
+        {
+            long received = Volatile.Read(ref _lastReceivedTicks);
+            long writing = Volatile.Read(ref _writeStarted);
+            long now = Stopwatch.GetTimestamp();
+            return Healthy && received != 0 &&
+                Stopwatch.GetElapsedTime(received, now).TotalMilliseconds < InputLeaseMilliseconds &&
+                (writing == 0 || Stopwatch.GetElapsedTime(writing, now).TotalMilliseconds < MaximumInputAgeMilliseconds);
+        }
+    }
     internal void Abort() => Fault(LanSessionFault.Overflow);
 
     /// <summary>
@@ -246,9 +260,13 @@ public sealed class LanSession(LanLink link) : IDisposable
                         return;
                     }
                     Volatile.Write(ref _writeStarted, now);
+                    int timeout = frame.Type is LanFrameType.Ping or LanFrameType.Pong
+                        ? ConnectionTimeoutMilliseconds : MaximumInputAgeMilliseconds;
+                    Volatile.Write(ref _writeDeadline, now + Stopwatch.Frequency * timeout / 1000);
                     await _link.Wire
                         .WriteAsync(frame.Type, frame.Payload, cancellationToken)
                         .ConfigureAwait(false);
+                    Volatile.Write(ref _writeDeadline, 0);
                     Volatile.Write(ref _writeStarted, 0);
                 }
             }
@@ -379,15 +397,14 @@ public sealed class LanSession(LanLink link) : IDisposable
                 await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
 
                 long now = Stopwatch.GetTimestamp();
-                long writeStarted = Volatile.Read(ref _writeStarted);
-                if (writeStarted != 0 &&
-                    Stopwatch.GetElapsedTime(writeStarted, now).TotalMilliseconds > MaximumInputAgeMilliseconds)
+                long writeDeadline = Volatile.Read(ref _writeDeadline);
+                if (writeDeadline != 0 && now >= writeDeadline)
                 {
                     Fault(LanSessionFault.Timeout);
                     return;
                 }
-                if (now - Volatile.Read(ref _lastReceivedTicks) >=
-                    Stopwatch.Frequency * (LeaseMilliseconds / 1000.0))
+                if (Stopwatch.GetElapsedTime(Volatile.Read(ref _lastReceivedTicks), now).TotalMilliseconds >=
+                    ConnectionTimeoutMilliseconds)
                 {
                     Fault(LanSessionFault.Timeout);
                     return;
@@ -457,7 +474,7 @@ public sealed class LanSession(LanLink link) : IDisposable
         }
 
         long elapsed = now - echoed;
-        if (elapsed > Stopwatch.Frequency * (LeaseMilliseconds / 1000.0))
+        if (Stopwatch.GetElapsedTime(echoed, now).TotalMilliseconds > ConnectionTimeoutMilliseconds)
         {
             // Arbitrary remote ticks must not produce implausibly long telemetry.
             return;

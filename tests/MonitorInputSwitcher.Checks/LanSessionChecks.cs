@@ -8,7 +8,14 @@ internal static class LanSessionChecks
 {
     public static async Task RunAsync(LanTestAssertion check, X509Certificate2 pcIdentity, X509Certificate2 laptopIdentity)
     {
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await CheckSession(check, pcIdentity, laptopIdentity, staySilent: false);
+        await CheckSession(check, pcIdentity, laptopIdentity, staySilent: true);
+    }
+
+    private static async Task CheckSession(LanTestAssertion check, X509Certificate2 pcIdentity,
+        X509Certificate2 laptopIdentity, bool staySilent)
+    {
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         using var pcTcp = new TcpClient { NoDelay = true };
@@ -26,6 +33,22 @@ internal static class LanSessionChecks
         int activeHandlers = 0;
         bool concurrent = false;
         var sender = pc.RunAsync((_, _) => ValueTask.CompletedTask, stop.Token);
+        if (staySilent)
+        {
+            var reason = await Observe(sender);
+            check("persistently silent peer times out and further sends are rejected",
+                reason == LanSessionFault.Timeout && !pc.TrySend(LanFrameType.Input, new byte[] { 1 }));
+            return;
+        }
+        // The TLS link is established, but the simulated peer misses several heartbeats.
+        await Task.Delay(1600, stop.Token);
+        check("brief peer silence keeps the authenticated session open", !sender.IsCompleted && pc.Healthy);
+        check("remote control lease expires during peer silence", !pc.InputResponsive);
+        if (!pc.Healthy)
+        {
+            await Observe(sender);
+            return;
+        }
         var receiver = laptop.RunAsync(async (frame, ct) =>
         {
             concurrent |= Interlocked.Increment(ref activeHandlers) > 1;
@@ -40,6 +63,10 @@ internal static class LanSessionChecks
         }, stop.Token);
         try
         {
+            // Only Ping/Pong travel while the user is idle. Resume input on the same link.
+            await Task.Delay(6000, stop.Token);
+            check("idle heartbeat renews input leases on both original sessions",
+                pc.InputResponsive && laptop.InputResponsive && !sender.IsCompleted && !receiver.IsCompleted);
             var values = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
             check("session accepts input in its bounded writer", values.All(value => pc.TrySend(LanFrameType.Input, new byte[] { value })));
             await complete.Task.WaitAsync(stop.Token);
@@ -67,7 +94,7 @@ internal static class LanSessionChecks
     {
         try
         {
-            await worker.WaitAsync(TimeSpan.FromSeconds(4));
+            await worker.WaitAsync(TimeSpan.FromSeconds(9));
             return LanSessionFault.None;
         }
         catch (LanSessionException ex)
