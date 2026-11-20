@@ -42,3 +42,9 @@ dotnet publish .\src\MonitorInputSwitcher -c Release -r win-x64 --self-contained
 ```
 
 The default test run uses simulated monitor responses. The optional `--probe` command reads the connected displays and prints advertised input codes without changing the monitor input. App settings and logs are stored under `%LOCALAPPDATA%\MonitorInputSwitcher`.
+
+## LAN KVM development
+
+The feature branch includes one-time pairing, certificate-pinned TLS and Private IPv4 discovery. The test suite exercises pairing and transport over TCP loopback. Connecting through the app, reconnecting after Wi-Fi loss, and sharing physical mouse and keyboard input are still under development.
+
+The architecture and test checklist cover the Ethernet PC, ASUS laptop and shared MSI display. [LAN architecture and two-machine checklist](docs/lan-kvm.md)

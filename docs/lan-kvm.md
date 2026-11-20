@@ -38,3 +38,14 @@ Lặp lại ca Windows và mất Wi-Fi ít nhất ba lượt. Giữ joystick OSD
 | Tải và phục hồi | Ghi RTT, jitter, độ sâu hàng đợi lớn nhất, số sự kiện gom, lỗi thứ tự, số lần khôi phục và thời gian reconnect. Đo CPU/RAM lúc rảnh và khi di chuyển nhanh. |
 
 Baseline tại commit `03bb50f` có 184 khẳng định thành công và chưa có đường truyền LAN để đo. Đánh dấu kết quả loopback và lỗi mạng nhân tạo là **mô phỏng**. Mục tiêu trên hai máy thật là p95 dưới 25 ms trong điều kiện LAN/Wi-Fi tốt. Chỉ ghi đạt sau khi có kết quả từ PC và ASUS G531.
+
+### Kết quả kiểm tra trong môi trường phát triển
+
+| Phép kiểm tra | Kết quả |
+| --- | --- |
+| Build Windows và bộ kiểm tra dự án | 327 khẳng định thành công, gồm các kiểm tra DDC/CI sẵn có. |
+| TCP/TLS loopback | Hai vai trò xác thực qua mTLS và ghép đôi theo dấu vân tay. Kiểm tra từ chối sai dấu vân tay, mã đã dùng và thu hồi. Mất phản hồi ghép đôi được mô phỏng. |
+| Định tuyến và khám phá | Mô phỏng kiểm tra chọn subnet, loại địa chỉ không hợp lệ, độ dài gói UDP, nonce và dấu vân tay. Windows Network List Manager trả về 0 hồ sơ Private trên máy chạy kiểm tra. |
+| Hàng đợi | Mô phỏng giữ 256 khung, phát hiện tràn ở khung tiếp theo và đóng phiên. |
+
+Các ca trên xác nhận từng thành phần. Số đo độ trễ input và kiểm thử PC–ASUS G531 vẫn chờ phiên chạy trên thiết bị đích.

@@ -77,3 +77,9 @@ Lệnh đầu chạy các kiểm tra mô phỏng. Lệnh thứ hai chỉ đọc 
 - Trong phiên desktop Windows 11, đã mở giao diện, nhận phím `Ctrl+Alt+2` ở trạng thái chưa cấu hình HDMI và ẩn rồi mở lại chính cửa sổ đang chạy.
 - Bản EXE tự chứa đã chạy thử với `--tray`.
 - Cần thử đổi nguồn thật theo cả hai chiều trên PC và laptop đích. Cần xác minh riêng tính năng khởi động cùng Windows, tạo shortcut và chạy trên Windows 10 nếu sử dụng hệ điều hành này.
+
+## Phát triển KVM qua LAN
+
+Nhánh tính năng có mã mời dùng một lần, TLS xác thực bằng dấu vân tay chứng chỉ và khám phá thiết bị qua IPv4 Private. Bộ kiểm thử chạy ghép đôi và truyền dữ liệu qua TCP loopback. Kết nối qua giao diện, tự kết nối lại khi mất Wi-Fi và chia sẻ bàn phím, chuột vật lý đang được phát triển.
+
+Tài liệu mô tả kiến trúc và các bước kiểm thử trên PC Ethernet, laptop ASUS và màn hình MSI dùng chung. [Kiến trúc LAN và checklist hai máy](docs/lan-kvm.md)
