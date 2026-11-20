@@ -18,6 +18,13 @@ public sealed record LanPrivateRoute(IPAddress LocalAddress, IPAddress SubnetMas
     private const int MaximumPrefixLength = 30;
 
     /// <summary>
+    /// The Windows IPv4 interface index of the adapter that owns this address, or zero
+    /// when no verified index is available. Datagrams may only use a route whose index
+    /// matches the interface reported by the Windows packet information.
+    /// </summary>
+    internal int InterfaceIndex { get; init; }
+
+    /// <summary>
     /// The directed broadcast address of the subnet. A route that was not built from a
     /// usable unicast address and contiguous subnet mask reports <see cref="IPAddress.Any"/>
     /// so an unusable route never exposes a plausible link address.
@@ -255,9 +262,21 @@ public static class LanPrivateNetwork
                 }
 
                 IPInterfaceProperties properties;
+                int interfaceIndex;
                 try
                 {
                     properties = adapter.GetIPProperties();
+
+                    // Discovery must be able to prove which interface a datagram arrived on.
+                    // An adapter without a verified IPv4 interface index contributes no
+                    // routes rather than an unconstrained one.
+                    IPv4InterfaceProperties? ipv4Properties = properties.GetIPv4Properties();
+                    if (ipv4Properties is null || ipv4Properties.Index <= 0)
+                    {
+                        continue;
+                    }
+
+                    interfaceIndex = ipv4Properties.Index;
                 }
                 catch (Exception exception)
                     when (exception is NetworkInformationException or PlatformNotSupportedException)
@@ -277,7 +296,7 @@ public static class LanPrivateNetwork
                             unicast.IPv4Mask,
                             out LanPrivateRoute? route))
                     {
-                        routes.Add(route!);
+                        routes.Add(route! with { InterfaceIndex = interfaceIndex });
                     }
                 }
             }
