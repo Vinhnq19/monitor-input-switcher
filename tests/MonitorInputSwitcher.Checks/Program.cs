@@ -29,6 +29,7 @@ internal static class Program
             RunSettingsChecks();
             RunHotkeyChecks();
             RunArgumentChecks();
+            RunPairingInviteChecks();
         }
         catch (Exception ex)
         {
@@ -589,6 +590,267 @@ internal static class Program
             !AppInstance.TryParseArgs(null!, out _));
     }
 
+    private static void RunPairingInviteChecks()
+    {
+        var digest = new byte[32];
+        for (var index = 0; index < digest.Length; index++)
+        {
+            digest[index] = (byte)(index + 1);
+        }
+
+        var codeProperty = typeof(LanPairingInvite).GetProperty(nameof(LanPairingInvite.Code));
+        Check("pairing code property exists", codeProperty is not null);
+        Check(
+            "pairing code property has no setter",
+            codeProperty is not null && !codeProperty.CanWrite);
+
+        var shortDigestRejected = false;
+        try
+        {
+            _ = new LanPairingInvite(new byte[31]);
+        }
+        catch (ArgumentException)
+        {
+            shortDigestRejected = true;
+        }
+
+        Check("pairing constructor rejects a short digest", shortDigestRejected);
+
+        var time = new FakeTimeProvider();
+        var invite = new LanPairingInvite(digest, time);
+        var code = invite.Code;
+
+        Check("pairing code keeps the MIS1 prefix", code.StartsWith("MIS1-", StringComparison.Ordinal));
+        Equal("pairing code length", 69, code.Length);
+        Check(
+            "pairing code uses only base64url characters without padding",
+            code.IndexOf('+') < 0 && code.IndexOf('/') < 0 && code.IndexOf('=') < 0);
+        Check("pairing code has no whitespace", code.IndexOf(' ') < 0 && code.IndexOf('\t') < 0);
+
+        var parsed = LanPairingInvite.TryParse(code, out var parsedDigest, out var parsedSecret);
+        Check("pairing code parses", parsed);
+        EqualSequence("pairing parsed digest equals the supplied digest", digest, parsedDigest);
+        Equal("pairing parsed secret length", 16, parsedSecret.Length);
+
+        Check(
+            "pairing code parses when pasted with surrounding whitespace",
+            LanPairingInvite.TryParse(" \t" + code + "\r\n", out var pastedDigest, out var pastedSecret));
+        EqualSequence("pairing pasted digest equals the supplied digest", digest, pastedDigest);
+        Equal("pairing pasted secret length", 16, pastedSecret.Length);
+
+        CheckRejected("pairing null text", null);
+        CheckRejected("pairing empty text", string.Empty);
+        CheckRejected("pairing whitespace text", "   ");
+        CheckRejected("pairing unknown prefix", "MIS2-" + code.Substring(5));
+        CheckRejected("pairing lowercase prefix", "mis1-" + code.Substring(5));
+        CheckRejected("pairing missing prefix", code.Substring(5));
+        CheckRejected("pairing truncated code", code.Substring(0, code.Length - 1));
+        CheckRejected("pairing over long code", code + "A");
+        CheckRejected("pairing trailing padding", code + "=");
+        CheckRejected("pairing plus character", "MIS1-+" + code.Substring(6));
+        CheckRejected("pairing slash character", "MIS1-/" + code.Substring(6));
+        CheckRejected("pairing non ASCII character", "MIS1-\u00e9" + code.Substring(6));
+
+        var payload = PairingPayload(parsedDigest, parsedSecret);
+        Equal("pairing decoded payload length", 48, payload.Length);
+
+        var persistCalls = 0;
+
+        var tamperedSecret = (byte[])payload.Clone();
+        tamperedSecret[47] ^= 0x01;
+        Check(
+            "pairing tampered secret is rejected",
+            !invite.TryRedeem(tamperedSecret, () => persistCalls++));
+        Equal("pairing tampered secret does not persist", 0, persistCalls);
+
+        var tamperedDigest = (byte[])payload.Clone();
+        tamperedDigest[0] ^= 0x80;
+        Check(
+            "pairing tampered digest is rejected",
+            !invite.TryRedeem(tamperedDigest, () => persistCalls++));
+        Equal("pairing tampered digest does not persist", 0, persistCalls);
+
+        Check(
+            "pairing short payload is rejected",
+            !invite.TryRedeem(new byte[47], () => persistCalls++));
+        Equal("pairing short payload does not persist", 0, persistCalls);
+
+        var nullPersistThrew = false;
+        try
+        {
+            invite.TryRedeem(payload, null!);
+        }
+        catch (ArgumentNullException)
+        {
+            nullPersistThrew = true;
+        }
+
+        Check("pairing redeem rejects a null persist action", nullPersistThrew);
+
+        string? committedClient = null;
+        var persistRan = false;
+        var reentrantAccepted = true;
+        var redeemed = invite.TryRedeem(
+            payload,
+            () =>
+            {
+                persistRan = true;
+                reentrantAccepted = invite.TryRedeem(payload, () => committedClient = "nested");
+                committedClient = "client-1";
+            });
+
+        Check("pairing redeem succeeds with the generated code", redeemed);
+        Check("pairing redeem runs persistence", persistRan);
+        Check("pairing redeem is not re-entrant while persisting", !reentrantAccepted);
+        Equal("pairing redeem commits the validated client identity", "client-1", committedClient);
+
+        var replayPersisted = false;
+        Check(
+            "pairing replay after consumption fails",
+            !invite.TryRedeem(payload, () => replayPersisted = true));
+        Check("pairing replay does not persist", !replayPersisted);
+        Equal("pairing replay keeps the committed identity", "client-1", committedClient);
+
+        var retryTime = new FakeTimeProvider();
+        var retryInvite = new LanPairingInvite(digest, retryTime);
+        var retryParsed = LanPairingInvite.TryParse(
+            retryInvite.Code,
+            out var retryDigest,
+            out var retrySecret);
+        Check("pairing retry fixture parses", retryParsed);
+        EqualSequence("pairing retry digest equals the supplied digest", digest, retryDigest);
+        var retryPayload = PairingPayload(retryDigest, retrySecret);
+
+        var failedPersistCalls = 0;
+        var persistFailurePropagated = false;
+        try
+        {
+            retryInvite.TryRedeem(
+                retryPayload,
+                () =>
+                {
+                    failedPersistCalls++;
+                    throw new IOException("pairing persistence unavailable");
+                });
+        }
+        catch (IOException)
+        {
+            persistFailurePropagated = true;
+        }
+
+        Equal("pairing failed persistence calls persist once", 1, failedPersistCalls);
+        Check("pairing failed persistence propagates the exception", persistFailurePropagated);
+
+        string? retryClient = null;
+        var retryRedeemed = retryInvite.TryRedeem(retryPayload, () => retryClient = "client-2");
+        Check("pairing redeem succeeds after failed persistence", retryRedeemed);
+        Equal("pairing retry commits the client identity", "client-2", retryClient);
+
+        var retryReplayPersisted = false;
+        Check(
+            "pairing retry replay fails",
+            !retryInvite.TryRedeem(retryPayload, () => retryReplayPersisted = true));
+        Check("pairing retry replay does not persist", !retryReplayPersisted);
+
+        var boundaryTime = new FakeTimeProvider();
+        var freshInvite = new LanPairingInvite(digest, boundaryTime);
+        var freshParsed = LanPairingInvite.TryParse(
+            freshInvite.Code,
+            out var freshDigest,
+            out var freshSecret);
+        Check("pairing boundary fixture parses", freshParsed);
+        EqualSequence("pairing boundary digest equals the supplied digest", digest, freshDigest);
+        var freshPayload = PairingPayload(freshDigest, freshSecret);
+
+        boundaryTime.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromTicks(1));
+        var justBeforeExpiryPersisted = false;
+        Check(
+            "pairing redeem one tick before five minutes succeeds",
+            freshInvite.TryRedeem(freshPayload, () => justBeforeExpiryPersisted = true));
+        Check("pairing redeem one tick before five minutes persists", justBeforeExpiryPersisted);
+
+        var expiryTime = new FakeTimeProvider();
+        var expiringInvite = new LanPairingInvite(digest, expiryTime);
+        var expiringParsed = LanPairingInvite.TryParse(
+            expiringInvite.Code,
+            out var expiringDigest,
+            out var expiringSecret);
+        Check("pairing expiry fixture parses", expiringParsed);
+        EqualSequence("pairing expiry digest equals the supplied digest", digest, expiringDigest);
+        var expiringPayload = PairingPayload(expiringDigest, expiringSecret);
+
+        expiryTime.Advance(TimeSpan.FromMinutes(5));
+        var expiredPersisted = false;
+        Check(
+            "pairing redeem at exactly five minutes fails",
+            !expiringInvite.TryRedeem(expiringPayload, () => expiredPersisted = true));
+        Check("pairing expired invitation does not persist", !expiredPersisted);
+
+        expiryTime.Advance(TimeSpan.FromMinutes(1));
+        Check(
+            "pairing expired invitation stays rejected",
+            !expiringInvite.TryRedeem(expiringPayload, () => expiredPersisted = true));
+        Check("pairing expired invitation still does not persist", !expiredPersisted);
+
+        var invalidateTime = new FakeTimeProvider();
+        var invalidatedInvite = new LanPairingInvite(digest, invalidateTime);
+        var invalidatedParsed = LanPairingInvite.TryParse(
+            invalidatedInvite.Code,
+            out var invalidateDigest,
+            out var invalidateSecret);
+        Check("pairing invalidate fixture parses", invalidatedParsed);
+        EqualSequence("pairing invalidate digest equals the supplied digest", digest, invalidateDigest);
+        var invalidatePayload = PairingPayload(invalidateDigest, invalidateSecret);
+
+        invalidatedInvite.Invalidate();
+        var invalidatedPersisted = false;
+        Check(
+            "pairing redeem after invalidation fails",
+            !invalidatedInvite.TryRedeem(invalidatePayload, () => invalidatedPersisted = true));
+        Check("pairing invalidated invitation does not persist", !invalidatedPersisted);
+
+        var secondInvalidateThrew = false;
+        try
+        {
+            invalidatedInvite.Invalidate();
+        }
+        catch (Exception)
+        {
+            secondInvalidateThrew = true;
+        }
+
+        Check("pairing repeated invalidation is safe", !secondInvalidateThrew);
+
+        invalidateTime.Advance(TimeSpan.FromMinutes(5));
+        Check(
+            "pairing invalidated invitation stays rejected after expiry",
+            !invalidatedInvite.TryRedeem(invalidatePayload, () => invalidatedPersisted = true));
+
+        var otherInvite = new LanPairingInvite(digest, new FakeTimeProvider());
+        Check(
+            "pairing generated codes are not repeated",
+            !string.Equals(code, otherInvite.Code, StringComparison.Ordinal));
+
+        void CheckRejected(string name, string? text)
+        {
+            var accepted = LanPairingInvite.TryParse(
+                text,
+                out var rejectedDigest,
+                out var rejectedSecret);
+            Check($"{name} is rejected", !accepted);
+            Equal($"{name} leaves no digest", 0, rejectedDigest.Length);
+            Equal($"{name} leaves no secret", 0, rejectedSecret.Length);
+        }
+    }
+
+    private static byte[] PairingPayload(byte[] certificateSha256, byte[] secret)
+    {
+        var payload = new byte[certificateSha256.Length + secret.Length];
+        certificateSha256.CopyTo(payload, 0);
+        secret.CopyTo(payload, certificateSha256.Length);
+        return payload;
+    }
+
     private static int RunProbe()
     {
         try
@@ -792,5 +1054,16 @@ internal static class Program
             Values.Add(value);
             return _result;
         }
+    }
+
+    private sealed class FakeTimeProvider : TimeProvider
+    {
+        private long _elapsedTicks;
+
+        public override long GetTimestamp() => _elapsedTicks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan delta) => _elapsedTicks += delta.Ticks;
     }
 }
