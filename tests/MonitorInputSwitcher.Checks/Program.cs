@@ -30,6 +30,7 @@ internal static class Program
             RunHotkeyChecks();
             RunArgumentChecks();
             RunPairingInviteChecks();
+            LanTransportChecks.RunAsync(Check).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
