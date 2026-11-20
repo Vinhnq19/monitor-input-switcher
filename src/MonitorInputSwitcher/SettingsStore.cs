@@ -23,6 +23,7 @@ public readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
 
         return VirtualKey switch
         {
+            0x1B or >= 0x25 and <= 0x28 => true,
             >= 0x30 and <= 0x39 => true,
             >= 0x41 and <= 0x5A => true,
             >= 0x70 and <= 0x7A => true,
@@ -175,6 +176,16 @@ public readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
             return false;
         }
 
+        virtualKey = token.ToUpperInvariant() switch
+        {
+            "ESC" or "ESCAPE" => 0x1B, "LEFT" => 0x25, "UP" => 0x26, "RIGHT" => 0x27, "DOWN" => 0x28,
+            _ => 0
+        };
+        if (virtualKey != 0)
+        {
+            return true;
+        }
+
         if (token.Length is < 2 or > 3 || (token[0] != 'F' && token[0] != 'f'))
         {
             return false;
@@ -208,6 +219,11 @@ public readonly record struct HotkeyChord(uint Modifiers, uint VirtualKey)
 
     private static string FormatKey(uint virtualKey) => virtualKey switch
     {
+        0x1B => "Esc",
+        0x25 => "Left",
+        0x26 => "Up",
+        0x27 => "Right",
+        0x28 => "Down",
         0x30 or 0x31 or 0x32 or 0x33 or 0x34 or 0x35 or 0x36 or 0x37 or 0x38 or 0x39 => ((char)virtualKey).ToString(),
         >= 0x41 and <= 0x5A => ((char)virtualKey).ToString(),
         >= 0x70 and <= 0x87 => $"F{virtualKey - 0x6F}",

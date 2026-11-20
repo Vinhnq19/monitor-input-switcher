@@ -7,6 +7,10 @@ public sealed record DisplayTarget(string Id, string Name, bool IsG255F, bool Is
 
 public sealed class DisplayDiscovery
 {
+    internal static IReadOnlySet<string> SharedScreenNames() => EnumerateMappings()
+        .Where(mapping => mapping.ActiveInterfaces.Any(IsG255F))
+        .Select(mapping => mapping.GdiName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     private const uint EddGetDeviceInterfaceName = 0x00000001;
     private const uint DisplayDeviceActive = 0x00000001;
     private const string MonitorInterfaceClassGuid = "{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}";

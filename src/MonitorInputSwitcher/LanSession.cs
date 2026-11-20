@@ -38,7 +38,10 @@ public readonly record struct LanSessionStatistics(
     double? JitterMs,
     int QueueDepth,
     int PeakQueueDepth,
-    long QueueOverflows);
+    long QueueOverflows,
+    long SequenceGaps = 0,
+    long DuplicateFrames = 0,
+    long InvalidFrames = 0);
 
 /// <summary>
 /// One supervised session over an already paired <see cref="LanLink"/>. Exactly one writer
@@ -54,11 +57,12 @@ public sealed class LanSession(LanLink link) : IDisposable
     private const int HeartbeatPayloadLength = sizeof(long);
     private const int HeartbeatIntervalMilliseconds = 250;
     private const int LeaseMilliseconds = 1000;
+    private const int MaximumInputAgeMilliseconds = 200;
     private const double JitterSmoothing = 16.0;
 
     private readonly LanLink _link = link ?? throw new ArgumentNullException(nameof(link));
 
-    private readonly Channel<LanFrame> _sendQueue = Channel.CreateBounded<LanFrame>(
+    private readonly Channel<Outbound> _sendQueue = Channel.CreateBounded<Outbound>(
         new BoundedChannelOptions(QueueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -74,13 +78,17 @@ public sealed class LanSession(LanLink link) : IDisposable
     private double? _jitterMilliseconds;
 
     private long _lastReceivedTicks;
+    private long _writeStarted;
     private int _peakQueueDepth;
     private long _queueOverflows;
+    private long _sequenceGaps, _duplicates, _invalid;
     private int _faultCode;
     private int _started;
     private int _disposed;
     private int _linkClosed;
     private int _cancellationDisposed;
+    internal bool Healthy => Volatile.Read(ref _faultCode) == 0;
+    internal void Abort() => Fault(LanSessionFault.Overflow);
 
     /// <summary>
     /// Runs the session until cancellation, a fault or <see cref="Dispose"/>. Calling it more
@@ -193,7 +201,8 @@ public sealed class LanSession(LanLink link) : IDisposable
             jitter,
             _sendQueue.Reader.Count,
             Volatile.Read(ref _peakQueueDepth),
-            Interlocked.Read(ref _queueOverflows));
+            Interlocked.Read(ref _queueOverflows),
+            Interlocked.Read(ref _sequenceGaps), Interlocked.Read(ref _duplicates), Interlocked.Read(ref _invalid));
     }
 
     /// <summary>
@@ -227,11 +236,20 @@ public sealed class LanSession(LanLink link) : IDisposable
                        .WaitToReadAsync(cancellationToken)
                        .ConfigureAwait(false))
             {
-                while (_sendQueue.Reader.TryRead(out LanFrame frame))
+                while (_sendQueue.Reader.TryRead(out var frame))
                 {
+                    long now = Stopwatch.GetTimestamp();
+                    if (frame.Type == LanFrameType.Input &&
+                        Stopwatch.GetElapsedTime(frame.Timestamp, now).TotalMilliseconds > MaximumInputAgeMilliseconds)
+                    {
+                        Fault(LanSessionFault.Timeout);
+                        return;
+                    }
+                    Volatile.Write(ref _writeStarted, now);
                     await _link.Wire
                         .WriteAsync(frame.Type, frame.Payload, cancellationToken)
                         .ConfigureAwait(false);
+                    Volatile.Write(ref _writeStarted, 0);
                 }
             }
         }
@@ -333,8 +351,14 @@ public sealed class LanSession(LanLink link) : IDisposable
         {
             // Shutdown was requested; the owner reports the reason.
         }
-        catch (LanWireException)
+        catch (LanWireException exception)
         {
+            switch (exception.Fault)
+            {
+                case LanWireFault.Duplicate: Interlocked.Increment(ref _duplicates); break;
+                case LanWireFault.MissingOrOutOfOrder: Interlocked.Increment(ref _sequenceGaps); break;
+                default: Interlocked.Increment(ref _invalid); break;
+            }
             Fault(LanSessionFault.Protocol);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -355,6 +379,13 @@ public sealed class LanSession(LanLink link) : IDisposable
                 await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
 
                 long now = Stopwatch.GetTimestamp();
+                long writeStarted = Volatile.Read(ref _writeStarted);
+                if (writeStarted != 0 &&
+                    Stopwatch.GetElapsedTime(writeStarted, now).TotalMilliseconds > MaximumInputAgeMilliseconds)
+                {
+                    Fault(LanSessionFault.Timeout);
+                    return;
+                }
                 if (now - Volatile.Read(ref _lastReceivedTicks) >=
                     Stopwatch.Frequency * (LeaseMilliseconds / 1000.0))
                 {
@@ -385,7 +416,7 @@ public sealed class LanSession(LanLink link) : IDisposable
         // The wire writes from its own reusable buffer, but the queue outlives this call, so
         // the payload must be owned here.
         byte[] copy = payload.ToArray();
-        if (_sendQueue.Writer.TryWrite(new LanFrame(type, 0, copy)))
+        if (_sendQueue.Writer.TryWrite(new Outbound(type, copy, Stopwatch.GetTimestamp())))
         {
             return true;
         }
@@ -524,4 +555,6 @@ public sealed class LanSession(LanLink link) : IDisposable
             or LanFrameType.Applied
             or LanFrameType.MonitorRequest
             or LanFrameType.MonitorResult;
+
+    private readonly record struct Outbound(LanFrameType Type, byte[] Payload, long Timestamp);
 }

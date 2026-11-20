@@ -8,6 +8,8 @@ Thiết bị đích gồm PC Windows kết nối Ethernet, bàn phím và chuộ
 - Laptop tạo mã mời 5 phút dùng một lần. Mã chứa dấu vân tay chứng chỉ laptop và bí mật 128 bit. PC kiểm tra dấu vân tay trước khi gửi bí mật qua TLS. Laptop chỉ ghi nhận chứng chỉ PC sau khi kiểm tra mã. Các phiên điều khiển tiếp theo cần chứng chỉ đã ghép nối ở cả hai đầu. [Microsoft SslStream](https://learn.microsoft.com/en-us/dotnet/api/system.net.security.sslstream?view=net-8.0)
 - Kết nối chỉ dùng IPv4 cùng subnet trên mạng Windows Private. UDP khám phá máy và địa chỉ sau khi DHCP thay đổi. Input đi qua một luồng TCP với `TCP_NODELAY` và khung nhị phân giới hạn kích thước. Đây là cấu hình cần đo đầu tiên. UDP cho chuyển động sẽ làm phát sinh yêu cầu đồng bộ vị trí với các nút chuột đi qua TCP. [Microsoft TcpClient.NoDelay](https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.tcpclient.nodelay?view=net-8.0)
 - Hook Win32 có message loop riêng. Callback kiểm tra trạng thái, ghi sự kiện vào hàng đợi giới hạn và trả về. Raw Input cung cấp chuyển động tương đối của chuột USB. Một worker ở laptop kiểm tra thứ tự, gọi `SendInput` và quản lý các phím, nút đã inject. Công việc mạng, log và DDC/CI chạy ngoài callback. [LowLevelMouseProc](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelmouseproc), [LowLevelKeyboardProc](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelkeyboardproc), [Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-raw-input)
+- Khung input có thứ tự theo phiên. Chuột chỉ gom các mẫu di chuyển liền nhau trong hàng đợi. Nút, phím và cuộn tạo ranh giới gom. Thời hạn phát hiện mất phiên là khoảng một giây. Hàng đợi đầy hoặc lệnh ghi chậm đóng kết nối để tránh tiếp tục gửi input cũ.
+- Bàn giao yêu cầu laptop xác nhận màn hình và vị trí đích. PC giữ vị trí tương đối dọc cạnh, rồi ẩn con trỏ PC tại điểm đỗ trong khi điều khiển laptop. Trạng thái input, topology Windows và kết quả đọc nguồn MSI được cập nhật riêng. Tùy chọn Smart Switch gửi lệnh DDC/CI sau bàn giao.
 - Hai báo cáo PowerToys cung cấp ca hồi quy. Issue 51328 mô tả ký tự đảo thứ tự và đưa ra giả thuyết về hai đường inject đồng thời. Issue 45471 mô tả chuột treo hoặc giật khi đi qua mép, ban đầu với thiết bị giống bảng vẽ. Các báo cáo này chưa xác định nguyên nhân sự cố Device Manager trên PC đích. [PowerToys #51328](https://github.com/microsoft/PowerToys/issues/51328), [PowerToys #45471](https://github.com/microsoft/PowerToys/issues/45471)
 - Nếu phiên bị gián đoạn, các máy hủy quyền điều khiển từ xa và giải phóng những trạng thái input thuộc phiên. Sau khi reconnect, PC giữ quyền điều khiển cho đến lần bàn giao mới. Khi Windows hạn chế injection, ứng dụng báo lỗi và phục hồi theo các quyền của tiến trình đang chạy. [Microsoft SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
 
@@ -43,9 +45,21 @@ Baseline tại commit `03bb50f` có 184 khẳng định thành công và chưa c
 
 | Phép kiểm tra | Kết quả |
 | --- | --- |
-| Build Windows và bộ kiểm tra dự án | 327 khẳng định thành công, gồm các kiểm tra DDC/CI sẵn có. |
+| Build Windows và bộ kiểm tra dự án | 363 khẳng định thành công, gồm các kiểm tra DDC/CI sẵn có. |
 | TCP/TLS loopback | Hai vai trò xác thực qua mTLS và ghép đôi theo dấu vân tay. Kiểm tra từ chối sai dấu vân tay, mã đã dùng và thu hồi. Mất phản hồi ghép đôi được mô phỏng. |
 | Định tuyến và khám phá | Mô phỏng kiểm tra chọn subnet, loại địa chỉ không hợp lệ, độ dài gói UDP, nonce và dấu vân tay. Windows Network List Manager trả về 0 hồ sơ Private trên máy chạy kiểm tra. |
 | Hàng đợi | Mô phỏng giữ 256 khung, phát hiện tràn ở khung tiếp theo và đóng phiên. |
+| Input giả lập | Luồng 1.000 sự kiện chuột/giây và phím tương đương 150 WPM giữ thứ tự phím, nút và cuộn. Kiểm tra ánh xạ cả bốn mép với kích thước khác nhau và tọa độ màn hình âm. |
 
-Các ca trên xác nhận từng thành phần. Số đo độ trễ input và kiểm thử PC–ASUS G531 vẫn chờ phiên chạy trên thiết bị đích.
+### Benchmark TCP/TLS loopback
+
+Mỗi cấu hình gửi 1.024 mẫu sau warmup, bốn frame một lượt. Thời gian đo từ tạo sự kiện mô phỏng đến ACK. Máy đo và máy trả ACK dùng cùng Windows, không gọi `SendInput`. Chạy lại bằng `dotnet run --project .\tests\MonitorInputSwitcher.Checks -c Release -- --lan-benchmark`.
+
+| TCP_NODELAY | p50 | p95 | p99 | Lớn nhất |
+| --- | ---: | ---: | ---: | ---: |
+| Tắt | 0,110 ms | 0,172 ms | 0,290 ms | 13,730 ms |
+| Bật | 0,118 ms | 0,189 ms | 0,276 ms | 0,369 ms |
+
+Giữ `TCP_NODELAY` để bỏ chờ gom gói của TCP trong đường truyền tương tác. Một lượt loopback cho p95 tương đương giữa hai cấu hình và không đủ để suy ra độ trễ qua Wi-Fi. UDP chỉ phục vụ khám phá thiết bị, vì vậy số liệu packet loss cho luồng input không áp dụng.
+
+Các ca phần cứng còn chờ gồm G255F hai chiều, đo độ trễ và CPU/RAM trên PC–ASUS G531, DPI hỗn hợp, UniKey/IME, DHCP mới, Windows 10, Device Manager, toàn màn hình và chạy dài. Nếu tiến trình laptop bị buộc kết thúc khi đang giữ phím, nó có thể mất cơ hội gửi sự kiện nhả. Dùng phím vật lý trên laptop để kiểm tra và khôi phục trạng thái trong ca này.

@@ -78,8 +78,30 @@ Lệnh đầu chạy các kiểm tra mô phỏng. Lệnh thứ hai chỉ đọc 
 - Bản EXE tự chứa đã chạy thử với `--tray`.
 - Cần thử đổi nguồn thật theo cả hai chiều trên PC và laptop đích. Cần xác minh riêng tính năng khởi động cùng Windows, tạo shortcut và chạy trên Windows 10 nếu sử dụng hệ điều hành này.
 
-## Phát triển KVM qua LAN
+## Chia sẻ chuột và bàn phím qua LAN
 
-Nhánh tính năng có mã mời dùng một lần, TLS xác thực bằng dấu vân tay chứng chỉ và khám phá thiết bị qua IPv4 Private. Bộ kiểm thử chạy ghép đôi và truyền dữ liệu qua TCP loopback. Kết nối qua giao diện, tự kết nối lại khi mất Wi-Fi và chia sẻ bàn phím, chuột vật lý đang được phát triển.
+1. Chạy cùng phiên bản trên hai máy. Đặt hồ sơ mạng Windows trên mỗi máy thành **Private** nếu bạn tin cậy mạng đó. Hai địa chỉ IPv4 phải cùng subnet.
+2. Trên laptop, mở **Chuột và bàn phím**, chọn vai trò **Laptop** rồi bấm **Tạo mã**. Chuyển mã trực tiếp sang PC trong vòng 5 phút.
+3. Trên PC, chọn vai trò **PC**, dán mã và bấm **Ghép đôi**. Nếu không tìm thấy laptop, nhập IPv4 của laptop và thử lại. **Kiểm tra** xác nhận phiên TLS và hiển thị RTT.
+4. Đặt **Vị trí laptop** trên PC và bấm **Lưu và áp dụng**. Chọn màn hình ở từng máy nếu lựa chọn tự động chưa đúng. Đẩy con trỏ qua mép ngoài hướng về laptop. Đẩy qua mép đối diện để quay về PC. Thả các phím và nút chuột trước khi đi qua mép.
 
-Tài liệu mô tả kiến trúc và các bước kiểm thử trên PC Ethernet, laptop ASUS và màn hình MSI dùng chung. [Kiến trúc LAN và checklist hai máy](docs/lan-kvm.md)
+Chia sẻ mặc định tắt. **Ngắt kết nối** dừng phiên và giữ quyền ghép đôi. **Kết nối lại** tiếp tục chia sẻ. **Thu hồi ghép đôi** xóa quyền trên máy hiện tại. Xóa quyền ở cả hai máy khi ghép lại từ đầu. Nếu IP laptop đổi sau khi mất Wi-Fi, giữ tùy chọn tự kết nối lại để PC tìm IP mới. Nhập IP mới nếu router chặn khám phá.
+
+| Phím tắt chia sẻ | Thao tác |
+| --- | --- |
+| `Ctrl+Alt+Shift+Left` | Trả quyền điều khiển về PC |
+| `Ctrl+Alt+Shift+Right` | Bàn giao quyền điều khiển sang laptop |
+| `Ctrl+Alt+Shift+M` | Bật hoặc tắt chia sẻ |
+| `Ctrl+Alt+Shift+Esc` | Trả quyền về máy cục bộ và tạm dừng bàn giao đến khi kết nối lại hoặc lưu tùy chọn |
+
+Đổi phím tắt trong **Chuột và bàn phím**. Chọn tổ hợp khác phím DDC/CI. **Khóa chuyển qua mép** giữ quyền ở máy hiện tại cho đến khi chuyển chủ động. Thao tác vật lý trên laptop cũng kết thúc lần điều khiển từ xa. Dùng thiết bị vật lý trên máy đích cho cửa sổ quyền cao hoặc Secure Desktop.
+
+Bạn có thể bật **Smart Switch cũng đổi nguồn MSI** để đổi nguồn sau khi bàn giao input. Khi máy cục bộ chưa thể gửi lệnh, máy đã ghép đôi có thể xử lý nếu đã bật quyền DDC/CI cho máy kia. Giao diện báo kết quả DDC/CI riêng. Kiểm tra hình trên MSI sau khi đổi nguồn.
+
+### Firewall và lỗi kết nối
+
+- Trên laptop, cho phép TCP **49351** vào đúng EXE, hồ sơ **Private**, phạm vi **LocalSubnet**. Để tự tìm máy, cho phép thêm UDP **49351** với cùng phạm vi. Tạo rule trong Windows Defender Firewall with Advanced Security nếu cần. Cập nhật đường dẫn trong rule nếu di chuyển EXE portable.
+- Nếu nhập IP được nhưng tìm tự động thất bại, kiểm tra rule UDP hoặc thiết lập multicast trên router. Nếu nhập IP cũng hết thời gian, kiểm tra subnet, guest Wi-Fi, client isolation và rule TCP laptop.
+- **Chẩn đoán** hiển thị RTT, jitter, thống kê hàng đợi, thời gian kết nối lại và độ trễ capture-to-ACK lấy mẫu. Phép đo trên PC bao gồm cả phản hồi nên là giới hạn trên của thời gian chuyển đến `SendInput`. Báo cáo xuất gồm số liệu và mã lỗi.
+
+Chạy benchmark loopback bằng `dotnet run --project .\tests\MonitorInputSwitcher.Checks -c Release -- --lan-benchmark`. Tài liệu sau có kết quả mô phỏng và checklist kiểm tra PC, ASUS G531 và MSI. [Kiến trúc LAN và checklist hai máy](docs/lan-kvm.md)

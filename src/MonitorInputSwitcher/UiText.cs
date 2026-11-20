@@ -15,6 +15,7 @@ public static class UiText
     public static XmlLanguage Language => XmlLanguage.GetLanguage(Text("vi-VN", "en-US"));
 
     public static string Controls => Text("Điều khiển", "Controls");
+    public static string Sharing => Text("Chuột và bàn phím", "Mouse & keyboard");
     public static string Monitor => Text("Màn hình", "Monitor");
     public static string Detecting => Text("Đang nhận diện…", "Detecting…");
     public static string Unchecked => Text("Chưa kiểm tra", "Unchecked");

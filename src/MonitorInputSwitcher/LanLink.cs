@@ -30,7 +30,7 @@ public sealed class LanLink : IDisposable
     private TcpClient? _tcp;
     private int _disposed;
 
-    private LanLink(
+    internal LanLink(
         TcpClient tcp,
         SslStream ssl,
         LanWire wire,

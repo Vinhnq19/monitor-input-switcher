@@ -19,6 +19,10 @@ public partial class MainWindow : Window
     public event Action<AppSettings, bool>? SettingsRequested;
     public event Action? ShortcutsRequested;
 
+    internal LanSharingPanel Sharing => SharingPanel;
+
+    internal void OpenSharing() => Pages.SelectedItem = SharingTab;
+
     public void LoadSettings(AppSettings settings, bool startupEnabled, bool openSettings = false)
     {
         PopulateTargets(settings.MonitorId);

@@ -107,7 +107,11 @@ public partial class App : System.Windows.Application
                 window.Hide();
             }
         };
-        SessionEnding += (_, _) => _exiting = true;
+        SessionEnding += (_, _) =>
+        {
+            _exiting = true;
+            _ = _lanInput?.Suspend();
+        };
 
         var handle = new WindowInteropHelper(window).EnsureHandle();
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 18985) && !SystemParameters.HighContrast)
@@ -118,6 +122,7 @@ public partial class App : System.Windows.Application
 
         _source = HwndSource.FromHwnd(handle);
         _source?.AddHook(HandleMessage);
+        _lanWindowHandle = handle;
         _hotkeys = new GlobalHotkeys(handle);
         var hotkeyErrors = _hotkeys.InstallInitial(_settings);
         _hotkeyIssue = hotkeyErrors.Count == 0 ? null : string.Join(" ", hotkeyErrors);
@@ -142,6 +147,7 @@ public partial class App : System.Windows.Application
             }
         };
 
+        StartLan(window);
         _tray = CreateTray();
         window.LoadSettings(_settings, _startupEnabled, openSettings: _settings.HdmiPort is null);
         _instance!.StartListening(queued => Dispatcher.BeginInvoke(() => DispatchCommand(queued)), ex => Log(ex.Message));
@@ -161,6 +167,7 @@ public partial class App : System.Windows.Application
         menu.Items.Add("Laptop · HDMI", null, (_, _) => _ = RunMonitorOperation(InputAction.Laptop));
         menu.Items.Add("Switch Input", null, (_, _) => _ = RunMonitorOperation(InputAction.Toggle));
         menu.Items.Add(UiText.Text("Kiểm tra kết nối", "Check connection"), null, (_, _) => _ = RunMonitorOperation(null));
+        AddLanTrayItems(menu);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(UiText.Text("Thoát", "Exit"), null, (_, _) => Quit());
         var icon = new Forms.NotifyIcon
@@ -218,6 +225,11 @@ public partial class App : System.Windows.Application
             handled = true;
             _ = RunMonitorOperation(action);
         }
+        else if (message == GlobalHotkeys.MessageId && (long)wParam == LanToggleHotkeyId && _lanToggleRegistered)
+        {
+            handled = true;
+            _ = LanCommand("toggle");
+        }
         else if (message == DisplayChanged ||
                  (message == DeviceChanged && wParam == DeviceNodesChanged) ||
                  (message == PowerBroadcast && (wParam == ResumeSuspend || wParam == ResumeAutomatic)))
@@ -225,6 +237,7 @@ public partial class App : System.Windows.Application
             ++_displayGeneration;
             _cached = null;
             _refreshPending = true;
+            _ = RefreshLanScreens();
             if (_window?.IsVisible == true)
             {
                 _window.SetStatus(UiText.Text("Đang cập nhật…", "Refreshing…"), UiText.Text("Chờ kiểm tra", "Awaiting check"), UiText.Text("Chưa xác định", "Unknown"), false, false);
@@ -232,15 +245,19 @@ public partial class App : System.Windows.Application
                 _refresh.Start();
             }
         }
+        else if (message == PowerBroadcast && wParam == 4)
+        {
+            _ = _lanInput?.Suspend();
+        }
 
         return 0;
     }
 
-    private async Task RunMonitorOperation(InputAction? action, string? summary = null)
+    private async Task<SwitchOutcome?> RunMonitorOperation(InputAction? action, string? summary = null)
     {
         if (_exiting || _window is not { } window)
         {
-            return;
+            return null;
         }
 
         if (_busy)
@@ -250,14 +267,14 @@ public partial class App : System.Windows.Application
                 Report(UiText.Text("Đang xử lý một thao tác với màn hình. Hãy thử lại.", "A monitor operation is in progress. Try again."), notify: true);
             }
 
-            return;
+            return null;
         }
 
         var settings = _settings;
         if ((action is InputAction.Laptop or InputAction.Toggle) && settings.HdmiPort is null)
         {
             Report(UiText.Text("Hãy chọn cổng HDMI của laptop trong Cài đặt.", "Select the laptop HDMI port in Settings."), notify: true);
-            return;
+            return null;
         }
 
         _busy = true;
@@ -272,7 +289,7 @@ public partial class App : System.Windows.Application
             var result = await Task.Run(() => Operate(settings, action, cache));
             if (_exiting)
             {
-                return;
+                return null;
             }
 
             if (generation != _displayGeneration)
@@ -283,7 +300,7 @@ public partial class App : System.Windows.Application
                     window.SetStatus(UiText.Text("Đang cập nhật…", "Refreshing…"), UiText.Text("Chờ kiểm tra", "Awaiting check"), UiText.Text("Chưa xác định", "Unknown"), false, false);
                 }
 
-                return;
+                return result.Outcome;
             }
 
             _cached = result.Cache;
@@ -295,6 +312,7 @@ public partial class App : System.Windows.Application
                 DescribeSource(result.Current, settings), result.Target is not null, canToggle);
             Report(summary is null ? result.Message : $"{summary} {result.Message}",
                 notify: action is not null);
+            return result.Outcome;
         }
         catch (Exception ex)
         {
@@ -303,6 +321,7 @@ public partial class App : System.Windows.Application
                 window.SetStatus(UiText.Text("Chưa xác định", "Unknown"), UiText.Text("Lỗi truy vấn", "Query failed"), UiText.Text("Chưa xác định", "Unknown"), false, false);
                 Report((UiText.IsEnglish ? $"Could not complete the operation. {ex.Message}" : $"Không thể hoàn tất thao tác. {ex.Message}"), notify: action is not null);
             }
+            return null;
         }
         finally
         {
@@ -327,7 +346,8 @@ public partial class App : System.Windows.Application
             var hint = settings.MonitorId is not null
                 ? UiText.Text("Màn hình đã lưu hiện không khả dụng. Kết nối lại hoặc chọn màn hình trong Cài đặt.", "The saved monitor is unavailable. Reconnect it or select a monitor in Settings.")
                 : UiText.Text("Chưa nhận diện được đúng một MSI G255F. Hãy chọn màn hình trong Cài đặt.", "Could not uniquely identify an MSI G255F. Select a monitor in Settings.");
-            return new MonitorOperation(targets, null, null, UiText.Text("Chưa kiểm tra", "Unchecked"), hint, null);
+            return new MonitorOperation(targets, null, null, UiText.Text("Chưa kiểm tra", "Unchecked"), hint, null,
+                action is null ? null : SwitchOutcome.NotAvailable);
         }
 
         if (action is null)
@@ -363,7 +383,7 @@ public partial class App : System.Windows.Application
             : result.Current is not null ? UiText.Text("Đọc được VCP 0x60", "VCP 0x60 readable")
             : initial is null ? UiText.Text("Chưa kiểm tra", "Unchecked") : DescribeDdc(initial with { Current = null });
         return new MonitorOperation(targets, target, result.Current, ddc, result.Message,
-            initial is null ? null : CacheCapabilities(target, initial));
+            initial is null ? null : CacheCapabilities(target, initial), result.Outcome);
     }
 
     private static DisplayTarget? SelectTarget(IReadOnlyList<DisplayTarget> targets, string? id)
@@ -434,8 +454,13 @@ public partial class App : System.Windows.Application
         var hotkeysChanged = settings.PcHotkey != previous.PcHotkey ||
                              settings.LaptopHotkey != previous.LaptopHotkey ||
                              settings.ToggleHotkey != previous.ToggleHotkey;
+        if (hotkeysChanged)
+        {
+            SetLanToggleRegistration(false);
+        }
         if (hotkeysChanged && !_hotkeys.TryApply(settings, out var error))
         {
+            RefreshLanHotkeyConflicts();
             Report(error ?? UiText.Text("Không thể thay đổi phím tắt.", "Could not update the hotkeys."));
             return;
         }
@@ -450,12 +475,14 @@ public partial class App : System.Windows.Application
             {
                 _hotkeyIssue = rollbackError;
             }
+            RefreshLanHotkeyConflicts();
 
             Report((UiText.IsEnglish ? $"Could not save settings. {ex.Message}" : $"Không thể lưu cài đặt. {ex.Message}"));
             return;
         }
 
         _settings = settings;
+        RefreshLanHotkeyConflicts();
         _loadIssue = null;
         if (hotkeysChanged)
         {
@@ -545,17 +572,38 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void Quit(int exitCode = 0)
+    private async void Quit(int exitCode = 0)
     {
+        if (_exiting)
+        {
+            return;
+        }
         _exiting = true;
         _hotkeys?.Dispose();
-        Shutdown(exitCode);
+        try
+        {
+            await StopLan().WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            Log("LAN shutdown exceeded two seconds.");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Log("LAN shutdown failed.");
+        }
+        finally
+        {
+            Shutdown(exitCode);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         _exiting = true;
         _refresh.Stop();
+        _lanUiTimer?.Stop();
+        SetLanToggleRegistration(false);
         if (_source is { IsDisposed: false })
         {
             _source.RemoveHook(HandleMessage);
@@ -577,7 +625,7 @@ public partial class App : System.Windows.Application
 
     private sealed record MonitorOperation(
         IReadOnlyList<DisplayTarget> Targets, DisplayTarget? Target, uint? Current,
-        string Status, string Message, CachedCapabilities? Cache);
+        string Status, string Message, CachedCapabilities? Cache, SwitchOutcome? Outcome = null);
 
     [DllImport("dwmapi.dll", ExactSpelling = true)]
     private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int valueSize);

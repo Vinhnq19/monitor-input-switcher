@@ -28,6 +28,8 @@ internal static class LanTransportChecks
         await RunTlsChecksAsync(check).ConfigureAwait(false);
     }
 
+    public static Task RunBenchmarkAsync(LanTestAssertion check) => RunTlsChecksAsync(check, benchmark: true);
+
     private static async Task RunWireChecksAsync(LanTestAssertion check)
     {
         CancellationToken cancellationToken = CancellationToken.None;
@@ -201,7 +203,7 @@ internal static class LanTransportChecks
         check("wire read honors cancellation", canceledRead);
     }
 
-    private static async Task RunTlsChecksAsync(LanTestAssertion check)
+    private static async Task RunTlsChecksAsync(LanTestAssertion check, bool benchmark = false)
     {
         string root = Path.Combine(
             Path.GetTempPath(),
@@ -216,6 +218,11 @@ internal static class LanTransportChecks
         {
             clientIdentity = LanIdentity.Open(clientDirectory);
             serverIdentity = LanIdentity.Open(serverDirectory);
+            if (benchmark)
+            {
+                await LanBenchmarks.RunAsync(clientIdentity, serverIdentity).ConfigureAwait(false);
+                return;
+            }
             byte[] clientPin = LanIdentity.Fingerprint(clientIdentity);
             byte[] serverPin = LanIdentity.Fingerprint(serverIdentity);
 
@@ -263,6 +270,7 @@ internal static class LanTransportChecks
                 clientIdentity, serverPin).ConfigureAwait(false);
             check("tls handshake honors cancellation", canceled);
             await LanPairingChecks.RunAsync(check, root, clientIdentity, serverIdentity).ConfigureAwait(false);
+            await LanSessionChecks.RunAsync(check, clientIdentity, serverIdentity).ConfigureAwait(false);
         }
         finally
         {

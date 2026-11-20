@@ -24,6 +24,11 @@ internal static class Program
 
         try
         {
+            if (args is ["--lan-benchmark"])
+            {
+                LanTransportChecks.RunBenchmarkAsync(Check).GetAwaiter().GetResult();
+                return _failures == 0 ? 0 : 1;
+            }
             RunInputSwitchChecks();
             RunCapabilityChecks();
             RunSettingsChecks();
@@ -31,6 +36,7 @@ internal static class Program
             RunArgumentChecks();
             RunPairingInviteChecks();
             LanTransportChecks.RunAsync(Check).GetAwaiter().GetResult();
+            LanInputChecks.RunAsync(Check).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {

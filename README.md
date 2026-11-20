@@ -43,8 +43,30 @@ dotnet publish .\src\MonitorInputSwitcher -c Release -r win-x64 --self-contained
 
 The default test run uses simulated monitor responses. The optional `--probe` command reads the connected displays and prints advertised input codes without changing the monitor input. App settings and logs are stored under `%LOCALAPPDATA%\MonitorInputSwitcher`.
 
-## LAN KVM development
+## Share the PC's mouse and keyboard
 
-The feature branch includes one-time pairing, certificate-pinned TLS and Private IPv4 discovery. The test suite exercises pairing and transport over TCP loopback. Connecting through the app, reconnecting after Wi-Fi loss, and sharing physical mouse and keyboard input are still under development.
+1. Run the same version on both computers. Set each Windows network profile to **Private** if you trust the network. Both computers need IPv4 addresses on the same subnet.
+2. Open **Mouse & keyboard** on the laptop. Select **Laptop**, then **Create invite**. Transfer the invitation directly to the PC within five minutes.
+3. On the PC select **PC**, paste the invitation and choose **Pair**. If discovery fails, enter the laptop's IPv4 address and try again. **Test connection** checks for an authenticated session and displays its RTT.
+4. On the PC, set **Laptop position** in the screen layout and select **Save and apply**. Select the screen attached to each side of the connection if automatic selection is unsuitable. Push the pointer through the exposed edge toward the laptop, then return through the opposite edge. Keep keys and mouse buttons released when crossing.
 
-The architecture and test checklist cover the Ethernet PC, ASUS laptop and shared MSI display. [LAN architecture and two-machine checklist](docs/lan-kvm.md)
+Sharing is off initially. **Disconnect** stops the current service while keeping the pairing. **Reconnect** resumes it. **Unpair** revokes trust on this computer. Clear the pairing on both machines to start over. After losing Wi-Fi, enable automatic reconnect and let the PC discover the laptop again, or enter its updated address if multicast is blocked.
+
+| Sharing shortcut | Action |
+| --- | --- |
+| `Ctrl+Alt+Shift+Left` | Return control to the PC |
+| `Ctrl+Alt+Shift+Right` | Hand off control to the laptop |
+| `Ctrl+Alt+Shift+M` | Toggle sharing |
+| `Ctrl+Alt+Shift+Esc` | Restore local control and pause handoffs until reconnect or save |
+
+Edit these shortcuts in **Mouse & keyboard**. Keep them distinct from the monitor shortcuts. **Lock screen edges** keeps the current device until an explicit switch. The laptop's physical input also ends a remote handoff. Windows protects elevated windows and the secure desktop. Use physical input on the target for those screens.
+
+**Smart Switch** can also change the MSI source after the input handoff. This option is off initially. If the local monitor operation cannot send the request, a paired device that has explicitly enabled peer DDC/CI can try it. The application reports the DDC/CI result separately. Check the picture on the MSI after switching.
+
+### Firewall and connection problems
+
+- Allow inbound TCP **49351** on the laptop for this executable on **Private** networks with **LocalSubnet** scope. For automatic discovery, also allow inbound UDP **49351** with the same scope. Create the rules in Windows Defender Firewall with Advanced Security if Windows prompts or a rule is missing. Update the executable path in the rule if you move the portable app.
+- If you can use a manual IP but automatic discovery fails, check the UDP rule or multicast settings on the router. If manual IP also times out, verify both machines are on the same subnet and check guest Wi-Fi, client isolation, and the laptop TCP rule.
+- The **Diagnostics** section displays RTT, jitter, queue counts, reconnect time and sampled capture-to-ACK latency. On the PC, capture-to-ACK includes the time for the reply and is an upper bound on delivery to `SendInput`. Exports contain metrics and error codes.
+
+The architecture and test checklist cover the Ethernet PC, ASUS laptop and shared MSI display. The loopback benchmark is available with `dotnet run --project .\tests\MonitorInputSwitcher.Checks -c Release -- --lan-benchmark`. [LAN architecture and two-machine checklist](docs/lan-kvm.md)
