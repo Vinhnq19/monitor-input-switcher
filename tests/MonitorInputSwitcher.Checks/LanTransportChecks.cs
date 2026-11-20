@@ -262,6 +262,7 @@ internal static class LanTransportChecks
             bool canceled = await CanceledHandshakeAsync(
                 clientIdentity, serverPin).ConfigureAwait(false);
             check("tls handshake honors cancellation", canceled);
+            await LanPairingChecks.RunAsync(check, root, clientIdentity, serverIdentity).ConfigureAwait(false);
         }
         finally
         {
