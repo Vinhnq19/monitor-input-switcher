@@ -266,10 +266,10 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
                     if (services.QueryService(ref service, ref iid, out object browser) < 0) continue;
                     try
                     {
-                        if (((ShellBrowser)browser).QueryActiveShellView(out object view) < 0) continue;
+                        if (((ShellBrowser)browser).QueryActiveShellView(out ShellView view) < 0) continue;
                         try
                         {
-                            if (((OleWindow)view).GetWindow(out nint viewWindow) < 0 || !ViewHasFocus(viewWindow)) continue;
+                            if (view.GetWindow(out nint viewWindow) < 0 || !ViewHasFocus(viewWindow)) continue;
                             string directory = ((dynamic)candidate).Document.Folder.Self.Path;
                             if (!Path.IsPathFullyQualified(directory) || directory.Length < 3 || directory[1] != ':') continue;
                             var resolved = new ExplorerDestination(window, viewWindow, Path.GetFullPath(directory));
@@ -342,8 +342,9 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
         [PreserveSig] int QueryService(ref Guid service, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object value);
     }
 
-    [ComImport, Guid("00000114-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface OleWindow { [PreserveSig] int GetWindow(out nint hwnd); }
+    // QueryActiveShellView supplies IShellView, whose first method is GetWindow.
+    [ComImport, Guid("000214E3-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ShellView { [PreserveSig] int GetWindow(out nint hwnd); }
 
     [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface ShellBrowser
@@ -360,7 +361,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
         [PreserveSig] int GetViewStateStream(uint mode, out nint stream);
         [PreserveSig] int GetControlWindow(uint id, out nint hwnd);
         [PreserveSig] int SendControlMsg(uint id, uint message, nint wParam, nint lParam, out nint result);
-        [PreserveSig] int QueryActiveShellView([MarshalAs(UnmanagedType.Interface)] out object view);
+        [PreserveSig] int QueryActiveShellView(out ShellView view);
     }
 
     [StructLayout(LayoutKind.Sequential)]
