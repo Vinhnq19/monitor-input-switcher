@@ -10,6 +10,7 @@ namespace MonitorInputSwitcher;
 internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
 {
     private readonly TaskCompletionSource<Dispatcher> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action<string> _log;
     private LanFileChannel? _channel;
     private LanFileChannel.Selection? _local;
@@ -17,6 +18,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
     private ExplorerDestination? _destination;
     private uint _observed;
     private long _lastReport;
+    private long _lastPasteSkip;
     private static readonly uint PreferredDropEffect = RegisterClipboardFormatW("Preferred DropEffect");
 
     private sealed record RemoteSelection(LanFileChannel Channel, LanFileChannel.Offer Offer, uint Sequence);
@@ -67,6 +69,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
                 _observed = GetClipboardSequenceNumber();
                 Volatile.Write(ref _local, null);
             }, DispatcherPriority.Send, stop).Task.ConfigureAwait(false);
+            Report("channel-ready");
             await channel.RunAsync().ConfigureAwait(false);
         }
         finally
@@ -86,6 +89,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
             if (!ReferenceEquals(channel, Volatile.Read(ref _channel))) return;
             ReadClipboard();
             SetRemote(offer is null ? null : new RemoteSelection(channel, offer, _observed));
+            if (offer is not null) Report("offer-received");
         });
     }
 
@@ -100,21 +104,49 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
 
     public bool TryPaste()
     {
+        var channel = Volatile.Read(ref _channel);
+        nint window = GetForegroundWindow();
+        if (!IsExplorerWindow(window)) return false;
         var remote = Volatile.Read(ref _remote);
+        if (channel is null || remote is null || remote.Channel != channel)
+        {
+            ReportPasteSkip(channel is null ? "paste-no-channel" : "paste-no-offer");
+            return false;
+        }
         var destination = Volatile.Read(ref _destination);
-        if (remote is null || remote.Channel != Volatile.Read(ref _channel) ||
-            destination is null || destination.Window != GetForegroundWindow() ||
-            !ViewHasFocus(destination.View) || remote.Sequence != GetClipboardSequenceNumber()) return false;
+        if (destination is null || destination.Window != window || !ViewHasFocus(destination.View))
+        {
+            ReportPasteSkip("paste-no-folder");
+            return false;
+        }
+        if (remote.Sequence != GetClipboardSequenceNumber())
+        {
+            ReportPasteSkip("paste-clipboard-changed");
+            return false;
+        }
         _ready.Task.Result.BeginInvoke(DispatcherPriority.Send, () =>
         {
             if (ReferenceEquals(remote, _remote) && remote.Channel == Volatile.Read(ref _channel) &&
                 remote.Sequence == GetClipboardSequenceNumber() && destination == FindDestination())
             {
+                Report("paste-requested");
                 _ = remote.Channel.PasteAsync(remote.Offer, destination.Directory);
             }
             else Report("paste-context-changed");
         });
         return true;
+    }
+
+    private void ReportPasteSkip(string code)
+    {
+        long now = Stopwatch.GetTimestamp();
+        long previous = Interlocked.Read(ref _lastPasteSkip);
+        if (previous != 0 && Stopwatch.GetElapsedTime(previous, now) < TimeSpan.FromSeconds(2)) return;
+        if (Interlocked.CompareExchange(ref _lastPasteSkip, now, previous) == previous &&
+            _ready.Task.IsCompletedSuccessfully)
+        {
+            _ = _ready.Task.Result.BeginInvoke(DispatcherPriority.Background, () => Report(code));
+        }
     }
 
     public async Task<bool> RecycleAsync(LanFileChannel.Selection selection,
@@ -173,6 +205,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
             _ready.TrySetException(ex);
             Report("clipboard", ex);
         }
+        finally { _stopped.TrySetResult(); }
     }
 
     private nint Message(nint window, int message, nint wParam, nint lParam, ref bool handled)
@@ -191,7 +224,6 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
             _observed = sequence;
             return;
         }
-        SetRemote(null);
         LanFileChannel.Selection? selection = null;
         if (!OpenClipboard(0)) return;
         try
@@ -232,7 +264,13 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
         finally { _ = CloseClipboard(); }
         if (GetClipboardSequenceNumber() != sequence) return;
         _observed = sequence;
+        if (_remote is not null)
+        {
+            SetRemote(null);
+            Report("offer-cleared-by-local-clipboard");
+        }
         Volatile.Write(ref _local, selection);
+        if (selection is not null) Report("offer-prepared", count: selection.Paths.Length);
         channel.PublishClipboard();
     }
 
@@ -246,7 +284,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
     private static ExplorerDestination? FindDestination()
     {
         nint window = GetForegroundWindow();
-        if (window == 0 || ClassName(window) is not ("CabinetWClass" or "ExploreWClass")) return null;
+        if (!IsExplorerWindow(window)) return null;
         object? shell = null;
         object? windows = null;
         try
@@ -293,6 +331,9 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
         }
     }
 
+    private static bool IsExplorerWindow(nint window) =>
+        window != 0 && ClassName(window) is "CabinetWClass" or "ExploreWClass";
+
     private static bool ViewHasFocus(nint view)
     {
         var state = new GuiThread { Size = Marshal.SizeOf<GuiThread>() };
@@ -334,6 +375,7 @@ internal sealed class LanFileClipboard : ILanFileClipboard, IAsyncDisposable
     {
         if (await _ready.Task.ConfigureAwait(false) is { HasShutdownStarted: false } dispatcher)
             await dispatcher.InvokeAsync(() => dispatcher.BeginInvokeShutdown(DispatcherPriority.Send)).Task.ConfigureAwait(false);
+        await _stopped.Task.ConfigureAwait(false);
     }
 
     [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

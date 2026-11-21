@@ -164,7 +164,8 @@ internal sealed class LanFileChannel(Stream stream, ILanFileClipboard clipboard,
             lock (_gate)
             {
                 // A manifest transfers ownership of the idle timer to the stream reader.
-                if (ReferenceEquals(_receiving, job) && !_manifestStarted) _lifetime.Cancel();
+                if (ReferenceEquals(_receiving, job) && !_manifestStarted)
+                    Fail("paste-manifest-timeout", new TimeoutException());
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException) { Fail("paste", ex); }
