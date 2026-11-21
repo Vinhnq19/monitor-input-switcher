@@ -1,41 +1,33 @@
-# Đăng Monitor Input Switcher lên GitHub
+# Đưa bản LAN File Transfer lên GitHub
 
-## Đưa mã nguồn lên repository
+## Đẩy mã nguồn
 
-1. Giải nén `MonitorInputSwitcher-source.zip` vào thư mục riêng. Mở PowerShell tại thư mục chứa `README.md`, `src` và `tests`.
-2. Tạo repository trống trên GitHub, ví dụ `monitor-input-switcher`. Nếu GitHub hỏi có tạo README hoặc .gitignore hay không, để trống vì gói nguồn đã có các tệp này. Chọn chế độ công khai hoặc riêng tư theo ý bạn.
-3. Chạy các lệnh sau. Thay `YOUR-USERNAME` bằng tài khoản hoặc tổ chức sở hữu repository và đổi tên repository nếu bạn đã chọn tên khác. Đăng nhập khi Git yêu cầu.
+Mở PowerShell tại `D:\MonitorInputSwitcher-source` và chạy:
 
 ```powershell
-git init -b main
-git add .
-git diff --cached --stat
-git commit -m "Initial release of Monitor Input Switcher"
-git remote add origin https://github.com/YOUR-USERNAME/monitor-input-switcher.git
-git push -u origin main
+git status -sb
+git push -u origin codex/lan-file-transfer
 ```
 
-`README.md` sẽ hiển thị hướng dẫn tiếng Anh ở trang chính. Liên kết **Tiếng Việt** mở `README.vi.md`. Chỉ đưa mã nguồn vào Git. Đính kèm các ZIP portable trong GitHub Releases.
+Mở trang so sánh trên GitHub và tạo pull request từ `codex/lan-file-transfer` vào `main`. Chọn **Create draft pull request** nếu vẫn đang kiểm tra trên PC và laptop. [Tạo pull request](https://github.com/Vinhnq19/monitor-input-switcher/compare/main...codex%2Flan-file-transfer?expand=1)
 
-## Mô tả ngắn cho mục About
+## Kiểm tra trên PC và ASUS
 
-> Switch your monitor between a DisplayPort PC and an HDMI laptop using DDC/CI, global hotkeys, the Windows system tray, or desktop shortcuts.
+Chạy bản mới trên cả hai máy đã ghép đôi. Trong File Explorer, thử Ctrl+C và Ctrl+X với tệp nhỏ, thư mục có thư mục rỗng, tên tiếng Việt và nhiều mục cùng lúc. Dán qua cả hai chiều, đổi tab Explorer ngay trước khi dán, kiểm tra một mục trùng tên và thử phục hồi bản gốc đã cắt từ Thùng rác.
 
-Chủ đề gợi ý `windows` · `ddc-ci` · `wpf` · `monitor` · `hotkeys`
+Thử một tệp lớn trong khi vẫn dùng chuột, bàn phím qua KVM. Ngắt Wi-Fi giữa một lượt cắt thử để xác nhận bản gốc còn trên máy gửi. Xem `%LOCALAPPDATA%\MonitorInputSwitcher\monitor.log` trên hai máy nếu có lỗi và đối chiếu độ trễ KVM khi rảnh với lúc đang truyền.
+
+## Sửa mục About
+
+Mở repository và bấm bánh răng cạnh **About**. Dán mô tả rồi chọn **Save changes**.
+
+> Windows LAN KVM with keyboard, mouse, and file sharing between two PCs, plus DDC/CI monitor input switching.
 
 ## Tạo bản phát hành
 
-Trong repository, mở **Releases**, tạo bản phát hành mới với tag `v1.0.0` trỏ tới nhánh `main`, rồi đính kèm:
+1. Sau khi xác nhận trên hai máy và merge pull request, mở **Releases → Draft a new release**.
+2. Tạo tag `v1.2.0-beta.1` trỏ tới commit trên `main` chứa tính năng. Đặt tiêu đề **Monitor Input Switcher v1.2.0 Beta 1**.
+3. Đính kèm hai ZIP trong `publish\release-v1.2.0-beta.1`, rồi chọn **This is a pre-release**. ZIP portable được tải lên dưới dạng tài sản của Release. Git chứa mã nguồn, tài liệu và logo.
+4. Dán nội dung bên dưới, kiểm tra lại tag và hai ZIP rồi bấm **Publish release**. [GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
 
-- `MonitorInputSwitcher-portable-win-x64.zip` cho giao diện tiếng Việt.
-- `MonitorInputSwitcher-en-portable-win-x64.zip` cho giao diện tiếng Anh.
-
-**Tiêu đề** — Monitor Input Switcher v1.0.0
-
-**Nội dung phát hành**
-
-> Portable Windows x64 builds with English and Vietnamese interfaces. Switch between a DisplayPort PC and an HDMI laptop using global hotkeys, the tray menu, or desktop shortcuts.
->
-> Extract the ZIP and run the EXE. In Settings, select the laptop’s HDMI port, then use Check connection before attempting the first switch. DDC/CI input switching depends on your monitor and connection. The MSI G255F read-only check detected and read the advertised input codes.
-
-Sau khi đăng, mở lại trang repository để xác nhận README hiển thị đúng và thử tải cả hai ZIP từ bản phát hành.
+> Copy or move files and folders between paired computers with Ctrl+C or Ctrl+X, then Ctrl+V in File Explorer. Supports multiple items and up to 10 GiB per transfer. Includes a new Windows app icon and portable x64 builds in Vietnamese and English. Update both computers to use file transfer.

@@ -1,5 +1,7 @@
 # Monitor Input Switcher
 
+<img src="src/MonitorInputSwitcher/Assets/logo.png" alt="Monitor Input Switcher logo" width="96">
+
 Switch your monitor between a DisplayPort PC and an HDMI laptop with global hotkeys, the Windows system tray, or desktop shortcuts. The app uses DDC/CI directly over the display cable and runs offline on Windows 10/11 x64.
 
 [Tiếng Việt](README.vi.md) · [Hướng dẫn đăng lên GitHub](GITHUB-PUBLISH.vi.md)
@@ -62,6 +64,12 @@ Sharing is off initially. **Disconnect** stops the current service while keeping
 Edit these shortcuts in **Mouse & keyboard**. Keep them distinct from the monitor shortcuts. **Lock screen edges** keeps the current device until an explicit switch. The laptop's physical input also ends a remote handoff. Windows protects elevated windows and the secure desktop. Use physical input on the target for those screens.
 
 **Smart Switch** can also change the MSI source after the input handoff. This option is off initially. If the local monitor operation cannot send the request, a paired device that has explicitly enabled peer DDC/CI can try it. The application reports the DDC/CI result separately. Check the picture on the MSI after switching.
+
+### Copy or move files between computers
+
+Run an updated build on both paired computers. Select files or folders in File Explorer and press **Ctrl+C** to copy or **Ctrl+X** to move. Switch computers, open a local destination folder in File Explorer, click its content area and press **Ctrl+V**. Each transfer supports up to 10 GiB and 10,000 entries. A newer clipboard action on the destination takes priority.
+
+An existing name gets a separate copy with a numbered suffix. A cut sends verified originals to the source computer's Recycle Bin after the receiver confirms the entire batch. An interrupted transfer keeps the originals. Transfer status and error codes are recorded in `%LOCALAPPDATA%\MonitorInputSwitcher\monitor.log`.
 
 ### Firewall and connection problems
 

@@ -8,6 +8,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(AppLanguage)' == 'en'">
@@ -15,6 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="Assets/app.ico" />
     <InternalsVisibleTo Include="MonitorInputSwitcher.Checks" />
     <Using Remove="System.Windows.Forms" />
     <Using Remove="System.Drawing" />

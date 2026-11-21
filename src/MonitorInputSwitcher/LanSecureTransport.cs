@@ -25,12 +25,14 @@ public static class LanSecureTransport
 
     private static readonly SslApplicationProtocol ApplicationProtocol =
         new("monitor-input-switcher/1");
+    internal static readonly SslApplicationProtocol ControlWithFiles = new("monitor-input-switcher/2");
+    internal static readonly SslApplicationProtocol FilesProtocol = new("monitor-input-switcher/files/1");
 
     public static async Task<SslStream> ConnectAsync(
         Stream transport,
         X509Certificate2 local,
         ReadOnlyMemory<byte> peerPin,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool paired = false, bool files = false)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(local);
@@ -54,7 +56,8 @@ public static class LanSecureTransport
             {
                 TargetHost = TargetHost,
                 EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                ApplicationProtocols = new List<SslApplicationProtocol> { ApplicationProtocol },
+                ApplicationProtocols = files ? [FilesProtocol] :
+                    paired ? [ControlWithFiles, ApplicationProtocol] : [ApplicationProtocol],
                 ClientCertificates = new X509CertificateCollection { local },
                 LocalCertificateSelectionCallback = (_, _, _, _, _) => local,
                 RemoteCertificateValidationCallback =
@@ -73,7 +76,7 @@ public static class LanSecureTransport
             await sslStream.AuthenticateAsClientAsync(options, cancellationToken)
                 .ConfigureAwait(false);
 
-            EnsureAuthenticatedSession(sslStream);
+            EnsureAuthenticatedSession(sslStream, options.ApplicationProtocols);
 
             SslStream established = sslStream;
             sslStream = null;
@@ -102,7 +105,7 @@ public static class LanSecureTransport
         Stream transport,
         X509Certificate2 local,
         ReadOnlyMemory<byte>? peerPin,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool paired = false)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(local);
@@ -134,7 +137,7 @@ public static class LanSecureTransport
                 ServerCertificateContext = serverContext,
                 ClientCertificateRequired = true,
                 EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                ApplicationProtocols = new List<SslApplicationProtocol> { ApplicationProtocol },
+                ApplicationProtocols = paired ? [ControlWithFiles, ApplicationProtocol, FilesProtocol] : [ApplicationProtocol],
                 RemoteCertificateValidationCallback =
                     (_, certificate, _, _) => ValidateRemoteCertificate(
                         certificate,
@@ -151,7 +154,7 @@ public static class LanSecureTransport
             await sslStream.AuthenticateAsServerAsync(options, cancellationToken)
                 .ConfigureAwait(false);
 
-            EnsureAuthenticatedSession(sslStream);
+            EnsureAuthenticatedSession(sslStream, options.ApplicationProtocols);
 
             X509Certificate? remoteCertificate = sslStream.RemoteCertificate;
             if (remoteCertificate is null)
@@ -324,7 +327,7 @@ public static class LanSecureTransport
         }
     }
 
-    private static void EnsureAuthenticatedSession(SslStream sslStream)
+    private static void EnsureAuthenticatedSession(SslStream sslStream, List<SslApplicationProtocol> protocols)
     {
         if (!sslStream.IsAuthenticated || !sslStream.IsMutuallyAuthenticated)
         {
@@ -339,7 +342,7 @@ public static class LanSecureTransport
                 "The negotiated TLS protocol is not supported.");
         }
 
-        if (!sslStream.NegotiatedApplicationProtocol.Equals(ApplicationProtocol))
+        if (!protocols.Contains(sslStream.NegotiatedApplicationProtocol))
         {
             throw new AuthenticationException(
                 "The negotiated application protocol is not supported.");

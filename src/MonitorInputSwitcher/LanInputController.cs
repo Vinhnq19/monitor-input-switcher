@@ -34,6 +34,9 @@ internal struct RawMouseWatchdog
 internal sealed class LanInputController : IAsyncDisposable
 {
     private readonly LanPeerService _peer;
+    private readonly LanFileClipboard _files;
+    private (int Code, int Flags)? _remotePaste;
+    private bool _localPaste;
     private readonly Channel<Emission> _outbound = Channel.CreateBounded<Emission>(
         new BoundedChannelOptions(512) { SingleReader = true, SingleWriter = true });
     private readonly TaskCompletionSource<Dispatcher> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,9 +73,10 @@ internal sealed class LanInputController : IAsyncDisposable
     private long _coalesced, _overflows;
     private double[] _latency = [];
 
-    public LanInputController(LanPeerService peer)
+    public LanInputController(LanPeerService peer, LanFileClipboard files)
     {
         _peer = peer;
+        _files = files;
         var thread = new Thread(ThreadMain) { IsBackground = true, Name = "LAN input (Win32)" };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
@@ -354,6 +358,21 @@ internal sealed class LanInputController : IAsyncDisposable
             }
         }
         uint mods = Modifiers();
+        if (vk == 0x56)
+        {
+            if (_localPaste)
+            {
+                if (up) _localPaste = false;
+                return true;
+            }
+            bool goesToLaptop = _options.Role == LanRole.Pc && _options.KeyboardFollows &&
+                _active != 0 && CanForward && Available;
+            if (!up && !repeat && !goesToLaptop && mods == HotkeyChord.Ctrl && _defaultDesktop && _files.TryPaste())
+            {
+                _localPaste = true;
+                return true;
+            }
+        }
         int chord = !up ? FindChord(mods, key.VirtualKey) : -1;
         if (chord >= 0)
         {
@@ -670,6 +689,23 @@ internal sealed class LanInputController : IAsyncDisposable
         {
             return;
         }
+        if (input.Kind == LanInputKind.Key)
+        {
+            var key = (input.A, input.B & ~2);
+            bool up = (input.B & 2) != 0;
+            if (_remotePaste == key)
+            {
+                if (up) _remotePaste = null;
+                return;
+            }
+            if (!up && !_down.Contains(key) && WindowsLanInput.VirtualKey(key.Item1, key.Item2) == 0x56 &&
+                (_down.Contains((0x1D, 0)) || _down.Contains((0x1D, 1))) &&
+                !_down.Any(held => held.Code is 0x38 or 0x2A or 0x36 or 0x5B or 0x5C) && _files.TryPaste())
+            {
+                _remotePaste = key;
+                return;
+            }
+        }
         if (input.Kind == LanInputKind.Move && _peerAllowsEdge && _buttons.Count == 0 && _down.Count == 0 &&
             _selected is not null)
         {
@@ -722,6 +758,7 @@ internal sealed class LanInputController : IAsyncDisposable
         int id = _active != 0 ? _active : _pending;
         bool warped = _active != 0 && _options.Role == LanRole.Pc;
         _active = _pending = _push = 0;
+        _remotePaste = null;
         CompleteManual(false);
         if (id != 0)
         {

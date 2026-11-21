@@ -15,7 +15,8 @@ internal enum LanError { None, NoPrivateRoute, InvalidSubnet, NotPaired, Refused
 internal sealed record LanConnection(LanState State, LanError Error = LanError.None, string? Name = null, IPAddress? Address = null);
 
 internal sealed class LanPeerService(
-    string directory, Func<LanFrame, CancellationToken, ValueTask> receive, Action linkEnded) : IAsyncDisposable
+    string directory, Func<LanFrame, CancellationToken, ValueTask> receive, Action linkEnded,
+    LanFileClipboard files) : IAsyncDisposable
 {
     private readonly LanTrustStore _trust = new(directory);
     private readonly SemaphoreSlim _lifecycle = new(1);
@@ -23,6 +24,7 @@ internal sealed class LanPeerService(
     private Task? _run;
     private LanPairingInvite? _invite;
     private LanSession? _session;
+    private FileSession? _fileSession;
     private LanConnection _status = new(LanState.Disconnected);
     private LanRole _role;
     private IPAddress? _manual;
@@ -200,6 +202,11 @@ internal sealed class LanPeerService(
                         else
                         {
                             await RunLaptop(routes, identity, generation.Token).ConfigureAwait(false);
+                            if (!_auto && !generation.IsCancellationRequested)
+                            {
+                                Publish(LanState.Disconnected);
+                                return;
+                            }
                         }
                     }
                     finally
@@ -269,8 +276,41 @@ internal sealed class LanPeerService(
 
         using (tcp)
         using (var link = await LanLink.ConnectPairedAsync(tcp, identity, _trust, Environment.MachineName, deadline.Token).ConfigureAwait(false))
+        using (var fileStop = CancellationTokenSource.CreateLinkedTokenSource(stop))
         {
-            await RunSession(link, stop).ConfigureAwait(false);
+            var session = RunSession(link, stop);
+            var transfer = link.FileToken is { } token
+                ? ConnectFiles(link.PeerAddress, routes, identity, token, fileStop.Token)
+                : Task.CompletedTask;
+            try { await session.ConfigureAwait(false); }
+            finally
+            {
+                fileStop.Cancel();
+                await transfer.ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task ConnectFiles(IPAddress peer, IReadOnlyList<LanPrivateRoute> routes, X509Certificate2 identity,
+        byte[] token, CancellationToken stop)
+    {
+        while (!stop.IsCancellationRequested)
+        {
+            try
+            {
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop);
+                deadline.CancelAfter(TimeSpan.FromSeconds(4));
+                using var tcp = await LanLink.OpenClientAsync(peer, routes, deadline.Token).ConfigureAwait(false);
+                using var link = await LanLink.ConnectPairedAsync(tcp, identity, _trust, Environment.MachineName,
+                    deadline.Token, token).ConfigureAwait(false);
+                await files.RunAsync(link.Stream, stop).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                if (!stop.IsCancellationRequested) files.Report("channel", ex);
+            }
+            try { await Task.Delay(2000, stop).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { return; }
         }
     }
 
@@ -280,6 +320,7 @@ internal sealed class LanPeerService(
         using var admission = new SemaphoreSlim(1);
         var listeners = new List<TcpListener>();
         var workers = new List<Task>();
+        var manualFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             foreach (var route in routes.DistinctBy(route => route.LocalAddress))
@@ -288,7 +329,7 @@ internal sealed class LanPeerService(
                 {
                     var listener = LanLink.StartListener(route);
                     listeners.Add(listener);
-                    workers.Add(Accept(listener, route, identity, admission, listening.Token));
+                    workers.Add(Accept(listener, route, identity, admission, manualFinished, listening.Token));
                 }
                 catch (SocketException) when (routes.Count > 1)
                 {
@@ -300,7 +341,7 @@ internal sealed class LanPeerService(
                 throw new NetworkFailure(LanError.Refused);
             }
             workers.Add(Respond(routes, identity, listening.Token));
-            await Task.WhenAny(workers.Take(listeners.Count)).ConfigureAwait(false);
+            await Task.WhenAny(workers.Take(listeners.Count).Append(manualFinished.Task)).ConfigureAwait(false);
         }
         finally
         {
@@ -309,20 +350,40 @@ internal sealed class LanPeerService(
             {
                 listener.Stop();
             }
-            await Task.WhenAll(workers).ConfigureAwait(false);
+            try { await Task.WhenAll(workers).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (manualFinished.Task.IsCompletedSuccessfully) { }
         }
     }
 
-    private async Task Accept(TcpListener listener, LanPrivateRoute route, X509Certificate2 identity, SemaphoreSlim admission, CancellationToken stop)
+    private async Task Accept(TcpListener listener, LanPrivateRoute route, X509Certificate2 identity,
+        SemaphoreSlim admission, TaskCompletionSource manualFinished, CancellationToken stop)
     {
-        while (!stop.IsCancellationRequested)
+        var workers = new List<Task>();
+        try
         {
-            using var tcp = await listener.AcceptTcpClientAsync(stop).ConfigureAwait(false);
-            if (!LanLink.IsEligibleClient(tcp, route) || !admission.Wait(0))
+            while (!stop.IsCancellationRequested)
             {
-                continue;
+                workers.RemoveAll(task => task.IsCompletedSuccessfully);
+                var tcp = await listener.AcceptTcpClientAsync(stop).ConfigureAwait(false);
+                if (manualFinished.Task.IsCompleted || workers.Count >= 4 || !LanLink.IsEligibleClient(tcp, route))
+                {
+                    tcp.Dispose();
+                    continue;
+                }
+                workers.Add(Serve(tcp, route, identity, admission, manualFinished, stop));
             }
+        }
+        finally { await Task.WhenAll(workers).ConfigureAwait(false); }
+    }
 
+    private async Task Serve(TcpClient tcp, LanPrivateRoute route, X509Certificate2 identity, SemaphoreSlim admission,
+        TaskCompletionSource manualFinished, CancellationToken stop)
+    {
+        using (tcp)
+        {
+            bool control = false;
+            bool operational = false;
+            FileSession? attached = null;
             try
             {
                 tcp.NoDelay = true;
@@ -330,31 +391,49 @@ internal sealed class LanPeerService(
                 deadline.CancelAfter(TimeSpan.FromSeconds(4));
                 if (_trust.Load() is null)
                 {
+                    if (!(control = admission.Wait(0))) return;
                     var invite = Volatile.Read(ref _invite) ?? throw new NetworkFailure(LanError.NotPaired);
                     await LanPairingChannel.PairAsLaptopAsync(tcp.GetStream(), identity, invite, _trust, deadline.Token).ConfigureAwait(false);
                     Interlocked.CompareExchange(ref _invite, null, invite);
                 }
                 else
                 {
-                    using var link = await LanLink.AcceptPairedAsync(tcp, route, identity, _trust, Environment.MachineName, deadline.Token).ConfigureAwait(false);
-                    await RunSession(link, stop).ConfigureAwait(false);
-                    if (!_auto)
+                    using var link = await LanLink.AcceptPairedAsync(tcp, route, identity, _trust, Environment.MachineName,
+                        deadline.Token, (isFile, address, token) =>
+                        {
+                            if (!isFile) return control = admission.Wait(0);
+                            FileSession? current = Volatile.Read(ref _fileSession);
+                            if (token is null || current is null || !address.Equals(current.Address) ||
+                                !CryptographicOperations.FixedTimeEquals(current.Token, token) ||
+                                Interlocked.CompareExchange(ref current.InUse, 1, 0) != 0) return false;
+                            attached = current;
+                            return true;
+                        }).ConfigureAwait(false);
+                    operational = true;
+                    if (attached is { } fileSession)
                     {
-                        return;
+                        using var fileStop = CancellationTokenSource.CreateLinkedTokenSource(stop, fileSession.Stop);
+                        await files.RunAsync(link.Stream, fileStop.Token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await RunSession(link, stop).ConfigureAwait(false);
                     }
                 }
             }
-            catch (Exception ex) when (!stop.IsCancellationRequested && ex is not OutOfMemoryException)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                Publish(LanState.Connecting, Classify(ex));
-                if (ex is LanSessionException && !_auto)
+                if (!stop.IsCancellationRequested && CurrentSession is null && attached is null)
                 {
-                    return;
+                    Publish(!operational || _auto ? LanState.Connecting : LanState.Disconnected, Classify(ex));
                 }
+                else if (!stop.IsCancellationRequested && attached is not null) files.Report("channel", ex);
             }
             finally
             {
-                admission.Release();
+                if (attached is not null) Volatile.Write(ref attached.InUse, 0);
+                if (control && operational && !_auto && !stop.IsCancellationRequested) manualFinished.TrySetResult();
+                if (control) admission.Release();
             }
         }
     }
@@ -374,6 +453,11 @@ internal sealed class LanPeerService(
     private async Task RunSession(LanLink link, CancellationToken stop)
     {
         using var session = new LanSession(link);
+        using var fileStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        if (_role == LanRole.Laptop && link.FileToken is { } token)
+        {
+            Volatile.Write(ref _fileSession, new FileSession(link.PeerAddress, token, fileStop.Token));
+        }
         Volatile.Write(ref _session, session);
         if (_lostAt != 0)
         {
@@ -386,6 +470,8 @@ internal sealed class LanPeerService(
         }
         finally
         {
+            Volatile.Write(ref _fileSession, null);
+            fileStop.Cancel();
             lock (_statisticsGate)
             {
                 _completedStats = Statistics with { QueueDepth = 0 };
@@ -395,6 +481,14 @@ internal sealed class LanPeerService(
             Publish(LanState.Reconnecting);
             linkEnded();
         }
+    }
+
+    private sealed class FileSession(IPAddress address, byte[] token, CancellationToken stop)
+    {
+        public IPAddress Address { get; } = address;
+        public byte[] Token { get; } = token;
+        public CancellationToken Stop { get; } = stop;
+        public int InUse;
     }
 
     private static async Task WatchRoutes(IReadOnlyList<LanPrivateRoute> routes, CancellationTokenSource generation)

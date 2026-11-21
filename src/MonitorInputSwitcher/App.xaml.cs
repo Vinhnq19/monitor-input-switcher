@@ -31,6 +31,7 @@ public partial class App : System.Windows.Application
     private GlobalHotkeys? _hotkeys;
     private DesktopIntegration? _desktop;
     private Forms.NotifyIcon? _tray;
+    private System.Drawing.Icon? _trayIcon;
     private AppSettings _settings = new();
     private CachedCapabilities? _cached;
     private string? _loadIssue;
@@ -170,9 +171,12 @@ public partial class App : System.Windows.Application
         AddLanTrayItems(menu);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(UiText.Text("Thoát", "Exit"), null, (_, _) => Quit());
+        using var iconStream = GetResourceStream(new Uri("Assets/app.ico", UriKind.Relative)).Stream;
+        using var iconResource = new System.Drawing.Icon(iconStream, 16, 16);
+        _trayIcon = (System.Drawing.Icon)iconResource.Clone();
         var icon = new Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = _trayIcon,
             ContextMenuStrip = menu,
             Text = AppTitle,
             Visible = true
@@ -616,6 +620,7 @@ public partial class App : System.Windows.Application
             _tray.ContextMenuStrip?.Dispose();
             _tray.Dispose();
         }
+        _trayIcon?.Dispose();
 
         _instance?.Dispose();
         base.OnExit(e);

@@ -1,5 +1,7 @@
 # Monitor Input Switcher
 
+<img src="src/MonitorInputSwitcher/Assets/logo.png" alt="Logo Monitor Input Switcher" width="96">
+
 [English](README.md) · [Hướng dẫn đăng lên GitHub](GITHUB-PUBLISH.vi.md)
 
 Monitor Input Switcher điều khiển nguồn vào của màn hình từ Windows qua DDC/CI. Với MSI G255F, bạn có thể dùng DisplayPort cho PC và HDMI cho laptop. EXE portable dành cho Windows 10/11 x64, mang theo runtime .NET và chạy ngoại tuyến dưới tài khoản Windows hiện tại.
@@ -97,6 +99,12 @@ Chia sẻ mặc định tắt. **Ngắt kết nối** dừng phiên và giữ qu
 Đổi phím tắt trong **Chuột và bàn phím**. Chọn tổ hợp khác phím DDC/CI. **Khóa chuyển qua mép** giữ quyền ở máy hiện tại cho đến khi chuyển chủ động. Thao tác vật lý trên laptop cũng kết thúc lần điều khiển từ xa. Dùng thiết bị vật lý trên máy đích cho cửa sổ quyền cao hoặc Secure Desktop.
 
 Bạn có thể bật **Smart Switch cũng đổi nguồn MSI** để đổi nguồn sau khi bàn giao input. Khi máy cục bộ chưa thể gửi lệnh, máy đã ghép đôi có thể xử lý nếu đã bật quyền DDC/CI cho máy kia. Giao diện báo kết quả DDC/CI riêng. Kiểm tra hình trên MSI sau khi đổi nguồn.
+
+### Sao chép hoặc di chuyển tệp qua LAN
+
+Chạy bản mới trên cả hai máy đã ghép đôi. Trong File Explorer, chọn tệp hoặc thư mục rồi bấm **Ctrl+C** để sao chép hoặc **Ctrl+X** để di chuyển. Chuyển máy, mở thư mục đích trên ổ cục bộ, bấm vào vùng nội dung rồi nhấn **Ctrl+V**. Mỗi lượt hỗ trợ tối đa 10 GiB và 10.000 mục. Thao tác clipboard mới hơn trên máy đích được ưu tiên.
+
+Khi trùng tên, ứng dụng giữ cả hai mục và thêm số vào tên mới. Với thao tác cắt, bản gốc được đưa vào Thùng rác trên máy gửi sau khi máy nhận xác nhận toàn bộ lượt. Nếu lượt chuyển bị gián đoạn, bản gốc được giữ lại. Xem trạng thái và mã lỗi trong `%LOCALAPPDATA%\MonitorInputSwitcher\monitor.log`.
 
 ### Firewall và lỗi kết nối
 

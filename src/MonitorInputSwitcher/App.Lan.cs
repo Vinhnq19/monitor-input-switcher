@@ -17,6 +17,7 @@ public partial class App
     private LanSharingOptions _lanOptions = new();
     private LanInputController? _lanInput;
     private LanPeerService? _lanPeer;
+    private LanFileClipboard? _lanFiles;
     private DispatcherTimer? _lanUiTimer;
     private nint _lanWindowHandle;
     private bool _lanToggleRegistered;
@@ -27,9 +28,10 @@ public partial class App
     private void StartLan(MainWindow window)
     {
         _lanOptions = LanSharingOptions.Load(_store.DirectoryPath);
+        _lanFiles = new LanFileClipboard(message => Dispatcher.BeginInvoke(() => Log(message)));
         _lanPeer = new LanPeerService(_store.DirectoryPath,
-            (frame, stop) => _lanInput!.Receive(frame, stop), () => _lanInput?.LinkEnded());
-        _lanInput = new LanInputController(_lanPeer);
+            (frame, stop) => _lanInput!.Receive(frame, stop), () => _lanInput?.LinkEnded(), _lanFiles);
+        _lanInput = new LanInputController(_lanPeer, _lanFiles);
         _lanInput.Hotkey += action => Dispatcher.BeginInvoke(() => _ = LanCommand(action switch
         {
             0 => "pc", 1 => "laptop", 2 => "toggle", _ => "emergency"
@@ -59,6 +61,8 @@ public partial class App
             {
                 await peer.DisposeAsync();
                 await input.DisposeAsync();
+                if (_lanFiles is { } clipboard) await clipboard.DisposeAsync();
+                _lanFiles = null;
                 _lanInput = null;
                 _lanPeer = null;
             }

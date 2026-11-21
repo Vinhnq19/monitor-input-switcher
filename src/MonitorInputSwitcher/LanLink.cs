@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -54,6 +55,10 @@ public sealed class LanLink : IDisposable
     public IPAddress PeerAddress { get; }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+    internal byte[]? FileToken { get; private init; }
+    internal bool IsFileChannel { get; private init; }
+    internal SslStream Stream => _ssl ?? throw new ObjectDisposedException(nameof(LanLink));
+    internal const int FileTokenSize = 32;
 
     /// <summary>
     /// Connects to <paramref name="peer"/> from the most specific eligible Private route
@@ -186,7 +191,7 @@ public sealed class LanLink : IDisposable
         X509Certificate2 identity,
         LanTrustStore trust,
         string localName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, byte[]? fileToken = null)
     {
         ArgumentNullException.ThrowIfNull(tcp);
         ArgumentNullException.ThrowIfNull(identity);
@@ -212,17 +217,22 @@ public sealed class LanLink : IDisposable
             byte[] pin = saved.ReadPin();
             try
             {
+                if (fileToken is not null && (promote || fileToken.Length != FileTokenSize))
+                {
+                    throw new AuthenticationException();
+                }
+
                 ssl = await LanSecureTransport.ConnectAsync(
                         tcp.GetStream(),
                         identity,
                         pin,
-                        cancellationToken)
+                        cancellationToken, paired: true, files: fileToken is not null)
                     .ConfigureAwait(false);
 
                 var wire = new LanWire(ssl);
 
                 await wire
-                    .WriteAsync(LanFrameType.Hello, localNameBytes, cancellationToken)
+                    .WriteAsync(LanFrameType.Hello, fileToken ?? localNameBytes, cancellationToken)
                     .ConfigureAwait(false);
 
                 LanFrame? reply = await wire
@@ -234,7 +244,13 @@ public sealed class LanLink : IDisposable
                     throw new InvalidOperationException("The handshake reply is invalid.");
                 }
 
-                string peerName = DecodeName(reply.Value.Payload);
+                byte[] payload = reply.Value.Payload;
+                bool upgraded = ssl.NegotiatedApplicationProtocol == LanSecureTransport.ControlWithFiles;
+                if ((upgraded && payload.Length <= FileTokenSize) || (fileToken is not null && payload.Length != 0))
+                {
+                    throw new InvalidOperationException("The handshake payload is invalid.");
+                }
+                string peerName = fileToken is not null ? "" : DecodeName(upgraded ? payload[FileTokenSize..] : payload);
                 IPAddress peerAddress = ReadRemoteAddress(tcp);
 
                 // The laptop's pin becomes trusted only once its Ready was accepted.
@@ -243,7 +259,11 @@ public sealed class LanLink : IDisposable
                     trust.Save(pin, pending: false);
                 }
 
-                var link = new LanLink(tcp, ssl, wire, peerAddress, peerName);
+                var link = new LanLink(tcp, ssl, wire, peerAddress, peerName)
+                {
+                    IsFileChannel = fileToken is not null,
+                    FileToken = upgraded ? payload[..FileTokenSize] : fileToken
+                };
                 success = true;
                 return link;
             }
@@ -273,7 +293,7 @@ public sealed class LanLink : IDisposable
         X509Certificate2 identity,
         LanTrustStore trust,
         string localName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Func<bool, IPAddress, byte[]?, bool>? admit = null)
     {
         ArgumentNullException.ThrowIfNull(tcp);
         ArgumentNullException.ThrowIfNull(route);
@@ -308,7 +328,7 @@ public sealed class LanLink : IDisposable
                         tcp.GetStream(),
                         identity,
                         pin,
-                        cancellationToken)
+                        cancellationToken, paired: admit is not null)
                     .ConfigureAwait(false);
 
                 CryptographicOperations.ZeroMemory(peerPin);
@@ -324,14 +344,24 @@ public sealed class LanLink : IDisposable
                     throw new InvalidOperationException("The handshake request is invalid.");
                 }
 
-                string peerName = DecodeName(first.Value.Payload);
                 IPAddress peerAddress = ReadRemoteAddress(tcp);
+                bool files = ssl.NegotiatedApplicationProtocol == LanSecureTransport.FilesProtocol;
+                byte[]? token = files ? first.Value.Payload :
+                    ssl.NegotiatedApplicationProtocol == LanSecureTransport.ControlWithFiles
+                        ? RandomNumberGenerator.GetBytes(FileTokenSize) : null;
+                if (files && token?.Length != FileTokenSize ||
+                    admit is not null && !admit(files, peerAddress, token))
+                {
+                    throw new AuthenticationException();
+                }
+                string peerName = files ? "" : DecodeName(first.Value.Payload);
+                byte[] ready = files ? [] : token is null ? localNameBytes : [.. token, .. localNameBytes];
 
                 await wire
-                    .WriteAsync(LanFrameType.Ready, localNameBytes, cancellationToken)
+                    .WriteAsync(LanFrameType.Ready, ready, cancellationToken)
                     .ConfigureAwait(false);
 
-                var link = new LanLink(tcp, ssl, wire, peerAddress, peerName);
+                var link = new LanLink(tcp, ssl, wire, peerAddress, peerName) { IsFileChannel = files, FileToken = token };
                 success = true;
                 return link;
             }

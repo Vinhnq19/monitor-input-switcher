@@ -21,6 +21,10 @@ internal static class Program
         {
             return RunProbe();
         }
+        if (args is ["--lan-file-shell-probe"])
+        {
+            return LanFileChecks.RunShellProbe();
+        }
 
         try
         {

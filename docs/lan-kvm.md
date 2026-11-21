@@ -13,6 +13,12 @@ Thiết bị đích gồm PC Windows kết nối Ethernet, bàn phím và chuộ
 - Hai báo cáo PowerToys cung cấp ca hồi quy. Issue 51328 mô tả ký tự đảo thứ tự và đưa ra giả thuyết về hai đường inject đồng thời. Issue 45471 mô tả chuột treo hoặc giật khi đi qua mép, ban đầu với thiết bị giống bảng vẽ. Các báo cáo này chưa xác định nguyên nhân sự cố Device Manager trên PC đích. [PowerToys #51328](https://github.com/microsoft/PowerToys/issues/51328), [PowerToys #45471](https://github.com/microsoft/PowerToys/issues/45471)
 - Nếu phiên bị gián đoạn, các máy hủy quyền điều khiển từ xa và giải phóng những trạng thái input thuộc phiên. Sau khi reconnect, PC giữ quyền điều khiển cho đến lần bàn giao mới. Khi Windows hạn chế injection, ứng dụng báo lỗi và phục hồi theo các quyền của tiến trình đang chạy. [Microsoft SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
 
+## Truyền tệp qua File Explorer
+
+- PC mở kết nối TLS thứ hai đến cùng TCP 49351. ALPN phân luồng và một mã ngẫu nhiên từ phiên KVM ràng buộc kênh tệp với đúng phiên đang chạy. Phiên KVM cũ tiếp tục thương lượng ALPN phiên bản 1.
+- Một luồng STA xử lý clipboard và xác định thư mục Explorer đang nhận Ctrl+V. Chỉ gửi mã đề nghị và chế độ copy/cut trước khi dán. Khi dán, máy gửi stream nội dung theo khối 64 KiB, tối đa 16 MiB/s. Máy nhận kiểm tra từng tệp, lưu vào đúng ổ đích và giữ cả hai tên khi trùng. Với cut, chỉ gọi Windows Shell để đưa nguồn vào Thùng rác sau xác nhận toàn bộ lượt và đối chiếu lại ID, nội dung và danh sách mục nguồn.
+- Bộ kiểm thử mô phỏng trên cùng máy xác minh truyền qua TLS, dấu bảo mật Windows, checksum lỗi và dọn dữ liệu tạm khi mất phiên. Chạy `dotnet run --project tests/MonitorInputSwitcher.Checks -c Release -- --lan-file-shell-probe` để thử Thùng rác bằng một tệp tổng hợp. Ca bàn phím/Explorer hai máy và ảnh hưởng lên độ trễ KVM vẫn cần ghi kết quả trên PC và ASUS trước khi phát hành.
+
 ## Checklist trên hai máy
 
 Ghi phiên bản EXE và Windows, cách kết nối mạng, độ phân giải, tỉ lệ DPI và màn hình nào đang nhận nguồn trên MSI. Dùng văn bản thử vô hại khi gõ. Sau mỗi ca, xác nhận PC vẫn dùng được bàn phím và chuột, kiểm tra các modifier và nút chuột đã nhả, rồi kiểm tra có thể thoát ứng dụng từ tray.
